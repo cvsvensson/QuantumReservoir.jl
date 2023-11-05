@@ -76,15 +76,16 @@ end
 
 ##
 particle_number = blockdiagonal(numberoperator(c), c)
-measurements = [particle_number]
 H0 = HR + HI
-system0 = QuantumDots.OpenSystem(H0, leads, measurements);
-diagonalsystem0 = QuantumDots.diagonalize(system0)
-ls0 = QuantumDots.LazyLindbladSystem(diagonalsystem0)
+ls0 = LazyLindbladSystem(H0, leads)
 
 ##
 prob0 = StationaryStateProblem(ls0)
 ρinternal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-12)
+
+# TODO: Fix types in Lazylindblad so that mul! does not hit generic_matmul
+# TODO: Fix performance in khatri_rao_dissipator!
+# TODO: add one(::BlockDiagonal) 
 rho0 = reshape(ρinternal0, size(H0)...)
 rhod0 = diag(rho0)
 tr(rho0) ≈ 1
