@@ -1,5 +1,8 @@
 [deps]
+ExponentialAction = "e24c0720-ea99-47e8-929e-571b494574d3"
+ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
 LinearSolve = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
+MLJLinearModels = "6ee0df7b-362f-4a72-a706-9e79364fb692"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 QuantumDots = "312194fd-fec5-4b07-ba1c-a40d7013a56a"

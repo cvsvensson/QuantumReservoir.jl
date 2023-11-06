@@ -3,6 +3,7 @@ using QuantumDots.BlockDiagonals
 using LinearAlgebra
 using Plots
 using LinearSolve
+using ExponentialUtilities
 
 N = 1
 # qn=QuantumDots.fermionnumber
@@ -15,6 +16,8 @@ c = FermionBasis(labels; qn)
 connection_labels = filter((ks) -> ks[1] != ks[2], Base.product(spatial_labels, spatial_labels) |> collect)
 Ilabels = filter(iszero ∘ first, spatial_labels)
 Rlabels = filter(k -> first(k) > 0, spatial_labels)
+fullIlabels = filter(iszero ∘ first, labels)
+fullRlabels = filter(k -> first(k) > 0, labels)
 IRconnections = filter(k -> first(k[1]) + first(k[2]) != 1, connection_labels)
 Rconnections = filter(k -> first(k[1]) + first(k[2]) > 1, connection_labels)
 Iconnections = filter(k -> first(k[1]) + first(k[2]) == 0, connection_labels)
@@ -54,8 +57,10 @@ HIR = hamiltonian(c, J, U; Jkeys=IRconnections, Ukeys=[])
 Γ = rand(2, 2)
 μL, μR = rand(2)
 T = 0.1
-leftlead = QuantumDots.CombinedLead((c[N, 1, :↑]' * Γ[1, 1], c[N, 2, :↑]' * Γ[1, 2], c[N, 1, :↓]' * Γ[1, 1], c[N, 2, :↓]' * Γ[1, 2]); T, μ=μL)
-rightlead = QuantumDots.CombinedLead((c[N, 1, :↑]' * Γ[2, 1], c[N, 2, :↑]' * Γ[2, 2], c[N, 1, :↓]' * Γ[2, 1], c[N, 2, :↓]' * Γ[2, 2]); T, μ=μR)
+leftlead = CombinedLead((c[N, 1, :↑]' * Γ[1, 1], c[N, 2, :↑]' * Γ[1, 2], c[N, 1, :↓]' * Γ[1, 1], c[N, 2, :↓]' * Γ[1, 2]); T, μ=μL)
+rightlead = CombinedLead((c[N, 1, :↑]' * Γ[2, 1], c[N, 2, :↑]' * Γ[2, 2], c[N, 1, :↓]' * Γ[2, 1], c[N, 2, :↓]' * Γ[2, 2]); T, μ=μR)
+input_dissipator = CombinedLead((c[0, 1, :↑]', c[0, 2, :↑]', c[0, 1, :↓]', c[0, 2, :↓]'); T, μ=-10)
+leads0 = (; input=input_dissipator, left=leftlead, right=rightlead)
 leads = (; left=leftlead, right=rightlead)
 
 ##
@@ -70,41 +75,64 @@ function initial_state(op, rho)
 end
 
 ##
-function generate_training_data(M)
-    m = rand(ComplexF64, 2^4, 2^4)
-    θ = rand()
-    [c[0, 1, :↑]', c[0, 2, :↓]', c[0, 1, :↑]' + c[0, 2, :↓]']
-    rho = m' * m
-    rho = rho / tr(rho)
-    purity = tr(rho)^2
-    occupations = [tr(rho * c[k..., :↑]' * c[k..., :↑]) for k in spatial_labels]
+function squeeze_operator(α, c=c; kwargs...)
+    A = α * c[0, 1, :↑]' * c[0, 2, :↑]' - hc
+    # b -> expv(one(eltype(A)), A, b; kwargs...)
+    e = exp(A)
+    b -> e * b
+end
+function generate_training_data(M, rho)
+    phases = 2pi * rand(M)
+    r = rand(M)
+    αs = r .* exp.(1im * phases)
+    rho0 = killer_op * rho * killer_op'
+    # rho0intern = internal_rep(rho0intern, sys)
+    ops = squeeze_operators.(α)
+    rhonew = [op * rho0 * op' for op in ops]
+    rhonew = rhonew ./ tr.(rhonew)
+    purity = tr.(rhonew .^ 2)
+    occupations = [tr(rhonew * c[k..., :↑]' * c[k..., :↑]) for k in spatial_labels]
+    return (; αs, rhonew, purity, occupations)
 end
 
 ##
 particle_number = blockdiagonal(numberoperator(c), c)
 H0 = HR + HI
-ls0 = LazyLindbladSystem(H0, leads)
-ls = LindbladSystem(H0, leads)
+ls0 = LindbladSystem(H0, leads0)
+lazyls0 = LazyLindbladSystem(H0, leads0)
 
 ##
-prob = StationaryStateProblem(ls)
 prob0 = StationaryStateProblem(ls0)
-ρinternal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
-ρinternal = solve(prob, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
-tomatrix(ρinternal, ls)
-tomatrix(ρinternal0, ls0)
+lazyprob0 = StationaryStateProblem(lazyls0)
+@time rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
+@time lazyrhointernal0 = solve(lazyprob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
+rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
+lazyrho0 = reshape(lazyρinternal0, size(H0))
+@assert norm(rho0 - lazyrho0) < 1e-6
 # TODO: Fix types in Lazylindblad so that mul! does not hit generic_matmul
 # TODO: Fix performance in khatri_rao_dissipator!
-rho0 = reshape(ρinternal0, size(H0)...)
+
+## Analyze initial state
 rhod0 = diag(rho0)
-tr(rho0) ≈ 1
-currents0 = map(diss -> tr(diss' * diagonalsystem.transformed_measurements[1]), ls0.dissipators)
+@assert tr(rho0) ≈ 1
+internal_N = QuantumDots.internal_rep(particle_number, ls0)
+currents_ops = map(diss -> diss' * internal_N, ls0.dissipators)
+currents = map(diss -> tr(QuantumDots.tomatrix(diss * ρinternal0, ls0) * particle_number), ls0.dissipators)
+currents2 = map(op -> ρinternal0' * op, currents_ops)
+@assert norm(map(-, currents, currents2)) / norm(currents) < 1e-6
+
+cR = FermionBasis(fullRlabels; qn)
+cI = FermionBasis(fullIlabels; qn)
+rhoI0 = partial_trace(rho0, fullIlabels, c, cI.symmetry)
+rhoR0 = partial_trace(rho0, fullRlabels, c, cR.symmetry)
+@assert rhoI0[1] ≈ 1
+@assert tr(rhoI0) ≈ 1
+pretty_print(rhoI0, cI)
+pretty_print(rhoR0, cR)
 
 ##
 H = H0 + HIR
-system = QuantumDots.OpenSystem(H, leads, measurements);
-diagonalsystem = QuantumDots.diagonalize(system)
-ls = QuantumDots.LazyLindbladSystem(diagonalsystem)
+ls = QuantumDots.LindbladSystem(H, leads)
 
 ##
 function time_evolve(op, rho0, ls)
