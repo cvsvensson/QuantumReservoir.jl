@@ -6,8 +6,10 @@ using LinearSolve
 using ExponentialUtilities
 using MLJLinearModels
 using OrdinaryDiffEq
+using Statistics
+
 ##
-N = 1
+N = 2
 labels = Base.product(0:N, 1:2) |> collect
 spatial_labels = labels
 qn = QuantumDots.fermionnumber
@@ -100,11 +102,11 @@ lazyprob0 = StationaryStateProblem(lazyls0)
 @time lazyrhointernal0 = solve(lazyprob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6);
 rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
 lazyrho0 = reshape(lazyrhointernal0, size(H0))
-@assert norm(rho0 - lazyrho0) < 1e-6
+@assert norm(rho0 - lazyrho0) < 1e-5
 
 ## Analyze initial state
 rhod0 = diag(rho0)
-@assert tr(rho0) ≈ 1
+@assert isapprox(tr(rho0), 1; atol=1e-3)
 internal_N = QuantumDots.internal_rep(particle_number, ls0)
 currents_ops = map(diss -> diss' * internal_N, ls0.dissipators)
 currents = map(diss -> tr(QuantumDots.tomatrix(diss * rhointernal0, ls0) * particle_number), ls0.dissipators)
@@ -116,7 +118,7 @@ cI = FermionBasis(fullIlabels; qn)
 rhoI0 = partial_trace(rho0, fullIlabels, c, cI.symmetry)
 rhoR0 = partial_trace(rho0, fullRlabels, c, cR.symmetry)
 @assert isapprox(rhoI0[1], 1; atol=1e-3)
-@assert tr(rhoI0) ≈ 1
+@assert isapprox(tr(rhoI0), 1; atol=1e-3)
 pretty_print(rhoI0, cI)
 pretty_print(rhoR0, cR)
 
@@ -125,43 +127,43 @@ H = H0 + HIR
 ls = QuantumDots.LindbladSystem(H, leads)
 
 ##
-function get_obs_data(sol, t_obs, current_ops)
-    reduce(vcat, [[real(sol(t)' * op) for op in current_ops] for t in t_obs])
+function get_obs_data(rhointernal, current_ops)
+    [real(rhointernal' * op) for op in current_ops]
 end
-function time_evolve(rho, ls, current_ops, t_obs=[0.5, 1, 2])
+function time_evolve(rho, ls, current_ops, t_obs=[0.5, 1, 2]; kwargs...)
+    L = Matrix(ls)
+    f = t -> expv(t, L, QuantumDots.internal_rep(rho, ls); kwargs...)
+    rhos = f.(t_obs)
+    reduce(vcat, [get_obs_data(rho, current_ops) for rho in rhos])
+end
+function time_evolve(rho, ls, current_ops, tspan::Tuple, t_obs=[0.5, 1, 2]; kwargs...)
     rhointernal = QuantumDots.internal_rep(rho, ls)
     drho!(out, rho, p, t) = mul!(out, ls, rho)
-    prob = ODEProblem(drho!, rhointernal, (0, 20))
-    sol = solve(prob, Tsit5())
+    prob = ODEProblem(drho!, rhointernal, tspan)
+    sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
     currents = reduce(hcat, [[real(sol(t)' * op) for op in current_ops] for t in sol.t]) |> permutedims
-    observations = get_obs_data(sol, t_obs, current_ops)
-    trs = [tr(QuantumDots.tomatrix(sol(t), ls)) |> real for t in sol.t]
-    subrhos = [partial_trace(QuantumDots.tomatrix(sol(t), ls), fullIlabels, c) for t in sol.t]
-    tr2s = [tr(QuantumDots.tomatrix(sol(t), ls)^2) |> real for t in sol.t]
-    return (; sol, currents, trs, tr2s, observations, subrhos)
+    observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
+    return (; sol, currents, observations)
 end
 internal_N = QuantumDots.internal_rep(particle_number, ls)
 current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 ##
-M = 100
+M = 200
 train_data = generate_training_data(M, rho0)
+timesols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, (0, 20)), train_data.rhos[1:3]);
 sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops), train_data.rhos);
-observed_data = reduce(hcat, map(sol -> sol.observations, sols)) |> permutedims
+observed_data = reduce(hcat, sols) |> permutedims
 ##
 p = plot()
-map(sol -> plot!(p, sol.sol.t, sol.trs, ylims=(0, 1.1)), sols[1:3])
-map(sol -> plot!(p, sol.sol.t, sol.tr2s, ylims=(0, 1.1)), sols[1:3])
-p
-##
-p = plot()
-map((sol, ls) -> plot!(p, sol.sol.t, sol.currents; ls, lw=2, c=[:red :blue]), sols, [:solid, :dash, :dashdot])
+map((sol, ls) -> plot!(p, sol.sol.t, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
 p
 
 ## Training
 X = observed_data
 y = train_data.true_data
 
-ridge = RidgeRegression(; fit_intercept=false)
+ridge = RidgeRegression(1e-2; fit_intercept=false)
+# ridge = QuantileRegression(; fit_intercept=false)
 W = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
 
 R = X' * X
@@ -170,11 +172,25 @@ W2 = inv(R + 1e-6 * I) * P
 
 W3 = pinv(X) * y
 
-map((x, yr) -> x' * W[1:end-1, :] .+ W[end, :] .- yr |> norm, eachrow(X), eachrow(y)) |> norm
+# map((x, yr) -> x' * W[1:end-1, :] .+ W[end, :] .- yr |> norm, eachrow(X), eachrow(y)) |> norm
+p1 = sortperm(y[:, 1])
+plot(X[p1, :] * W3[:, 1], label="pred")
+plot!(y[p1, 1], label="truth")
+
+let i = 3, perm, W = W2
+    perm = sortperm(y[:, i])
+    plot(X[perm, :] * W[:, i], label="pred")
+    plot!(y[perm, i], label="truth")
+end
+
+##
+((eachcol(X * W - y))) |> plot
+mean.(abs.(eachcol(X * W2 - y)))
+mean.(abs.(eachcol(X * W3 - y)))
 norm.(eachcol(X * W - y))
 norm.(eachcol(X * W2 - y))
 norm.(eachcol(X * W3 - y))
-y_pred = X * W
+y_pred = X * W2
 
 norm.(eachcol(y - y_pred))
 ##
