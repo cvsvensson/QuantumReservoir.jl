@@ -2,10 +2,16 @@ using QuantumDots
 using QuantumDots.BlockDiagonals
 using LinearAlgebra
 using Plots
+using LinearSolve
 
 N = 1
-c = FermionBasis(0:N, 1:2, (:↑, :↓); qn=QuantumDots.fermionnumber)
+# qn=QuantumDots.fermionnumber
+labels = Base.product(0:N, 1:2, (:↑, :↓)) |> collect
 spatial_labels = Base.product(0:N, 1:2) |> collect
+uplabels = map(l -> (l..., :↑), spatial_labels)
+downlabels = map(l -> (l..., :↓), spatial_labels) |> vec
+qn = f -> (QuantumDots.fermionnumber(uplabels, vec(labels))(f), QuantumDots.fermionnumber(downlabels, vec(labels))(f))
+c = FermionBasis(labels; qn)
 connection_labels = filter((ks) -> ks[1] != ks[2], Base.product(spatial_labels, spatial_labels) |> collect)
 Ilabels = filter(iszero ∘ first, spatial_labels)
 Rlabels = filter(k -> first(k) > 0, spatial_labels)
@@ -65,10 +71,10 @@ end
 
 ##
 function generate_training_data(M)
-    m = rand(ComplexF64,2^4,2^4)
+    m = rand(ComplexF64, 2^4, 2^4)
     θ = rand()
     [c[0, 1, :↑]', c[0, 2, :↓]', c[0, 1, :↑]' + c[0, 2, :↓]']
-    rho = m'*m
+    rho = m' * m
     rho = rho / tr(rho)
     purity = tr(rho)^2
     occupations = [tr(rho * c[k..., :↑]' * c[k..., :↑]) for k in spatial_labels]
@@ -78,14 +84,17 @@ end
 particle_number = blockdiagonal(numberoperator(c), c)
 H0 = HR + HI
 ls0 = LazyLindbladSystem(H0, leads)
+ls = LindbladSystem(H0, leads)
 
 ##
+prob = StationaryStateProblem(ls)
 prob0 = StationaryStateProblem(ls0)
-ρinternal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-12)
-
+ρinternal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
+ρinternal = solve(prob, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
+tomatrix(ρinternal, ls)
+tomatrix(ρinternal0, ls0)
 # TODO: Fix types in Lazylindblad so that mul! does not hit generic_matmul
 # TODO: Fix performance in khatri_rao_dissipator!
-# TODO: add one(::BlockDiagonal) 
 rho0 = reshape(ρinternal0, size(H0)...)
 rhod0 = diag(rho0)
 tr(rho0) ≈ 1
@@ -118,7 +127,7 @@ sols = map(op -> time_evolve(op, deepcopy(rho0), ls), initial_state_ops);
 ##
 p = plot()
 map(sol -> plot!(p, sol.sol.t, sol.trs, ylims=(0, 1.1)), sols)
-map(sol -> plot!(p, sol.sol.t, sol.tr2s, ylims=(0, 1.1)), sols) 
+map(sol -> plot!(p, sol.sol.t, sol.tr2s, ylims=(0, 1.1)), sols)
 p
 ##
 p = plot()
