@@ -77,15 +77,16 @@ ls = QuantumDots.LindbladSystem(H, leads)
 internal_N = QuantumDots.internal_rep(particle_number, ls)
 current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 ##
-M = 1000
+M = 200
 train_data = generate_training_data(M, rho0, c)
 val_data = generate_training_data(M, rho0, c)
 ##
-t_obs = range(0.5, 10, 20)
-timesols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, (0, 20)), train_data.rhos[1:3]);
-sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops), train_data.rhos);
+tspan = (0, 30)
+t_obs = range(0.01, 30, 20)
+timesols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, tspan, t_obs), train_data.rhos[1:3]);
+sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, t_obs), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims
-val_sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops), val_data.rhos);
+val_sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, t_obs), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims
 ##
 p = plot()
@@ -106,9 +107,9 @@ W3 = pinv(X) * y
 # map((x, yr) -> x' * W[1:end-1, :] .+ W[end, :] .- yr |> norm, eachrow(X), eachrow(y)) |> norm
 ##
 titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 4, perm, W = W, X = val_observed_data, y = val_data.true_data
+let i = 1, perm, W = W2, X = val_observed_data, y = val_data.true_data
     perm = sortperm(y[:, i])
-    plot(X[perm, :] * W[:, i], label="pred", title = titles[i])
+    plot(X[perm, :] * W[:, i], label="pred", title=titles[i])
     plot!(y[perm, i], label="truth")
     # plot(y[perm, i], X[perm, :] * W[:, i], label="prediction", title=titles[i])
     # plot!(y[perm, i], y[perm, i], label="truth", ls=:dash)

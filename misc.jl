@@ -48,17 +48,22 @@ function input_entanglement(rho, c=c)
 end
 
 function get_obs_data(rhointernal, current_ops)
-    [real(rhointernal' * op) for op in current_ops]
+    cur = [real(rhointernal' * op) for op in current_ops]
+    occ = [real(rhointernal' * op) for op in R_n_ops]
+    vcat(cur, occ)
+    # cur
+    # occ
 end
 
-
-function time_evolve(rho, ls, current_ops, t_obs=[0.5, 1, 2]; kwargs...)
+R_n_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
+function time_evolve(rho, ls, current_ops, t_obs; kwargs...)
     L = Matrix(ls)
-    f = t -> expv(t, L, QuantumDots.internal_rep(rho, ls); kwargs...)
+    rhointernal = QuantumDots.internal_rep(rho, ls)
+    f = t -> expv(t, L, rhointernal; kwargs...)
     rhos = f.(t_obs)
     reduce(vcat, [get_obs_data(rho, current_ops) for rho in rhos])
 end
-function time_evolve(rho, ls, current_ops, tspan::Tuple, t_obs=[0.5, 1, 2]; kwargs...)
+function time_evolve(rho, ls, current_ops, tspan::Tuple, t_obs; kwargs...)
     rhointernal = QuantumDots.internal_rep(rho, ls)
     drho!(out, rho, p, t) = mul!(out, ls, rho)
     prob = ODEProblem(drho!, rhointernal, tspan)
