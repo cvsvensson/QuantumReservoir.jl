@@ -53,8 +53,8 @@ end
 function get_obs_data(rhointernal, current_ops, occ_ops)
     cur = [real(rhointernal' * op) for op in current_ops]
     occ = [real(rhointernal' * op) for op in occ_ops]
-    vcat(cur, occ)
-    # cur
+    # vcat(cur, occ)
+    cur
     # occ
 end
 

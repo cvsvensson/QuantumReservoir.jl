@@ -29,12 +29,10 @@ HI = hopping_hamiltonian(c, J; Jkeys=Iconnections)
 HIR = hopping_hamiltonian(c, J; Jkeys=IRconnections)
 
 ##
-Γ = 1e-1(I + rand(2, 2))
-μs = rand(2)
+Γ = 1e1(I + rand(2, 2))
+μs = [-100,-100]#rand(2)
 T = 10norm(Γ)
 leads = Tuple(CombinedLead((c[N, k]' * sqrt(Γ[k, k]), c[N, mod1(k + 1, 2)]' * sqrt(Γ[k, mod1(k + 1, 2)])); T, μ=μs[k]) for k in 1:2)
-# leftlead = CombinedLead((c[N, 1]' * Γ[1, 1], c[N, 2]' * Γ[1, 2]); T, μ=μs[1])
-# rightlead = CombinedLead((c[N, 1,]' * Γ[2, 1], c[N, 2]' * Γ[2, 2]); T, μ=μs[2])
 input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-100)
 leads0 = (input_dissipator, leads...)
 # leads = (; left=leftlead, right=rightlead)
@@ -85,15 +83,16 @@ M = 200
 train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
 val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
 ##
-tspan = (0, 50)
-t_obs = range(0.01, 50, 10)
+tspan = (0, 40)
+t_obs = range(0.1, 5, 3)
 timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
-@time sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
-observed_data = reduce(hcat, sols) |> permutedims
-val_sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
+@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
+observed_data = reduce(hcat, sols) |> permutedims;
+val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims;
 ##
 p = plot()
+# map((sol) -> plot!(p, sol.ts, sol.currents; lw=2, c=[:red :blue]), timesols)
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
 vline!(t_obs)
 p
@@ -115,7 +114,7 @@ W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 3, perm, W = W2, X = val_observed_data, y = val_data.true_data
+let i = 2, perm, W = W2, X = val_observed_data, y = val_data.true_data
     perm = sortperm(y[:, i])
     plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw=3)
     plot!(y[perm, i], label="truth", lw=3)
