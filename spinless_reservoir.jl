@@ -7,6 +7,7 @@ using ExponentialUtilities
 using MLJLinearModels
 using OrdinaryDiffEq
 using Statistics
+using Folds
 
 includet("misc.jl")
 ##
@@ -28,14 +29,15 @@ HI = hopping_hamiltonian(c, J; Jkeys=Iconnections)
 HIR = hopping_hamiltonian(c, J; Jkeys=IRconnections)
 
 ##
-Γ = rand(2, 2)
-μL, μR = rand(2)
-T = 0.1
-leftlead = CombinedLead((c[N, 1]' * Γ[1, 1], c[N, 2]' * Γ[1, 2]); T, μ=μL)
-rightlead = CombinedLead((c[N, 1,]' * Γ[2, 1], c[N, 2]' * Γ[2, 2]); T, μ=μR)
-input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-10)
-leads0 = (; input=input_dissipator, left=leftlead, right=rightlead)
-leads = (; left=leftlead, right=rightlead)
+Γ = 1e-1(I + rand(2, 2))
+μs = rand(2)
+T = 10norm(Γ)
+leads = Tuple(CombinedLead((c[N, k]' * sqrt(Γ[k, k]), c[N, mod1(k + 1, 2)]' * sqrt(Γ[k, mod1(k + 1, 2)])); T, μ=μs[k]) for k in 1:2)
+# leftlead = CombinedLead((c[N, 1]' * Γ[1, 1], c[N, 2]' * Γ[1, 2]); T, μ=μs[1])
+# rightlead = CombinedLead((c[N, 1,]' * Γ[2, 1], c[N, 2]' * Γ[2, 2]); T, μ=μs[2])
+input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-100)
+leads0 = (input_dissipator, leads...)
+# leads = (; left=leftlead, right=rightlead)
 
 ##
 particle_number = blockdiagonal(numberoperator(c), c)
@@ -50,7 +52,7 @@ lazyprob0 = StationaryStateProblem(lazyls0)
 @time lazyrhointernal0 = solve(lazyprob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6);
 rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
 lazyrho0 = reshape(lazyrhointernal0, size(H0))
-@assert norm(rho0 - lazyrho0) < 1e-5
+@assert norm(rho0 - lazyrho0) < 1e-4
 
 ## Analyze initial state
 rhod0 = diag(rho0)
@@ -81,16 +83,21 @@ M = 200
 train_data = generate_training_data(M, rho0, c)
 val_data = generate_training_data(M, rho0, c)
 ##
-tspan = (0, 30)
-t_obs = range(0.01, 30, 20)
-timesols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, tspan, t_obs), train_data.rhos[1:3]);
-sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, t_obs), train_data.rhos);
+tspan = (0, 50)
+t_obs = range(0.01, 50, 10)
+timesols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, tspan, t_obs), train_data.rhos[1:2]);
+@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, current_ops, t_obs), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims
-val_sols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, t_obs), val_data.rhos);
+val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, current_ops, t_obs), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims
 ##
 p = plot()
-map((sol, ls) -> plot!(p, sol.sol.t, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
+map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
+vline!(t_obs)
+p
+##
+p = plot()
+map((sol, ls) -> plot!(p, sol.ts, sol.observations; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
 vline!(t_obs)
 p
 
@@ -101,16 +108,15 @@ y = train_data.true_data
 ridge = RidgeRegression(1e-4; fit_intercept=false)
 # ridge = QuantileRegression(; fit_intercept=false)
 W = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
-W2 = inv(X' * X + 1e-6 * I) * X' * y
+W2 = inv(X' * X + 1e-12 * I) * X' * y
 W3 = pinv(X) * y
 
-# map((x, yr) -> x' * W[1:end-1, :] .+ W[end, :] .- yr |> norm, eachrow(X), eachrow(y)) |> norm
 ##
 titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 1, perm, W = W2, X = val_observed_data, y = val_data.true_data
+let i = 2, perm, W = W2, X = val_observed_data, y = val_data.true_data
     perm = sortperm(y[:, i])
-    plot(X[perm, :] * W[:, i], label="pred", title=titles[i])
-    plot!(y[perm, i], label="truth")
+    plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw = 3)
+    plot!(y[perm, i], label="truth", lw = 3)
     # plot(y[perm, i], X[perm, :] * W[:, i], label="prediction", title=titles[i])
     # plot!(y[perm, i], y[perm, i], label="truth", ls=:dash)
 end

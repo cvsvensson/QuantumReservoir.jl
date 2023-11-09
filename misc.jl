@@ -68,7 +68,9 @@ function time_evolve(rho, ls, current_ops, tspan::Tuple, t_obs; kwargs...)
     drho!(out, rho, p, t) = mul!(out, ls, rho)
     prob = ODEProblem(drho!, rhointernal, tspan)
     sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
-    currents = reduce(hcat, [[real(sol(t)' * op) for op in current_ops] for t in sol.t]) |> permutedims
-    observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
-    return (; sol, currents, observations)
+    ts = range(tspan..., 200)
+    currents = reduce(hcat, [[real(sol(t)' * op) for op in current_ops] for t in ts]) |> permutedims
+    observations = reduce(hcat, [get_obs_data(QuantumDots.internal_rep(sol(t), ls), current_ops) for t in ts]) |> permutedims
+    # observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
+    return (; ts, sol, currents, observations)
 end

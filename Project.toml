@@ -1,6 +1,7 @@
 [deps]
 ExponentialAction = "e24c0720-ea99-47e8-929e-571b494574d3"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"
+Folds = "41a02a25-b8f0-4f67-bc48-60067656b558"
 LinearSolve = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
 MLJLinearModels = "6ee0df7b-362f-4a72-a706-9e79364fb692"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
