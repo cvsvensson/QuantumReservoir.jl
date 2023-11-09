@@ -12,8 +12,12 @@ is_nearest_neighbours(k1, k2) = k1 != k2 && abs(first(k1) - first(k2)) ∈ (0, 1
 #     Dict(couplings)
 # end
 
+function random_hoppings(labels, s=1)
+    couplings = [(k1, k2) => s * rand() for (k1, k2) in labels]
+    Dict(couplings)
+end
 function random_nearest_hoppings(labels, s=1)
-    couplings = [label => s * rand() for label in labels]
+    couplings = [(k1, k2) => s * rand() for (k1, k2) in labels if is_nearest_neighbours(k1, k2)]
     Dict(couplings)
 end
 
@@ -27,12 +31,11 @@ end
 
 normalize_rho!(rho) = rdiv!(rho, tr(rho))
 
-function generate_training_data(M, rho, c)
+function generate_training_data(M, rho, c; occ_ops)
     θ = 2pi * rand(M)
     rs = 10 * rand(M, 3)
-    I_n_ops = map(k -> c[k]' * c[k], Ilabels)
     rhonew = [modify_initial_state(p, rho) for p in zip(eachrow(rs), θ)]
-    true_data = reduce(hcat, map(rho -> get_target_data(rho, I_n_ops, c), rhonew)) |> permutedims
+    true_data = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c), rhonew)) |> permutedims
     return (; θ, rs, rhos=rhonew, true_data)
 end
 function get_target_data(rho, I_n_ops, c)
@@ -47,30 +50,30 @@ function input_entanglement(rho, c=c)
     real(-tr(rhosub * log(rhosub)))
 end
 
-function get_obs_data(rhointernal, current_ops)
+function get_obs_data(rhointernal, current_ops, occ_ops)
     cur = [real(rhointernal' * op) for op in current_ops]
-    occ = [real(rhointernal' * op) for op in R_n_ops]
+    occ = [real(rhointernal' * op) for op in occ_ops]
     vcat(cur, occ)
     # cur
     # occ
 end
 
-R_n_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
-function time_evolve(rho, ls, current_ops, t_obs; kwargs...)
+function time_evolve(rho, ls, t_obs; current_ops, occ_ops, kwargs...)
     L = Matrix(ls)
     rhointernal = QuantumDots.internal_rep(rho, ls)
     f = t -> expv(t, L, rhointernal; kwargs...)
     rhos = f.(t_obs)
-    reduce(vcat, [get_obs_data(rho, current_ops) for rho in rhos])
+
+    reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
-function time_evolve(rho, ls, current_ops, tspan::Tuple, t_obs; kwargs...)
+function time_evolve(rho, ls, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
     rhointernal = QuantumDots.internal_rep(rho, ls)
     drho!(out, rho, p, t) = mul!(out, ls, rho)
     prob = ODEProblem(drho!, rhointernal, tspan)
     sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
     ts = range(tspan..., 200)
     currents = reduce(hcat, [[real(sol(t)' * op) for op in current_ops] for t in ts]) |> permutedims
-    observations = reduce(hcat, [get_obs_data(QuantumDots.internal_rep(sol(t), ls), current_ops) for t in ts]) |> permutedims
+    observations = reduce(hcat, [get_obs_data(QuantumDots.internal_rep(sol(t), ls), current_ops, occ_ops) for t in ts]) |> permutedims
     # observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
     return (; ts, sol, currents, observations)
 end

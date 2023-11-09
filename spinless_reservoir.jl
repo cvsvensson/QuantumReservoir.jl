@@ -15,7 +15,7 @@ N = 1
 labels = vec(Base.product(0:N, 1:2) |> collect)
 qn = QuantumDots.fermionnumber
 c = FermionBasis(labels; qn)
-hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2]
+hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2 && is_nearest_neighbours(labels[k1], labels[k2])]
 Ilabels = filter(iszero ∘ first, labels)
 Rlabels = filter(!iszero ∘ first, labels)
 Ihalflabels = filter(x -> isone(x[2]), Ilabels)
@@ -23,7 +23,7 @@ Iconnections = filter(k -> first(k[1]) + first(k[2]) == 0, hopping_labels)
 Rconnections = filter(k -> first(k[1]) + first(k[2]) > 1, hopping_labels)
 IRconnections = filter(k -> abs(first(k[1]) - first(k[2])) == 1, hopping_labels)
 ##
-J = random_nearest_hoppings(hopping_labels)
+J = random_hoppings(hopping_labels)
 HR = hopping_hamiltonian(c, J; Jkeys=Rconnections)
 HI = hopping_hamiltonian(c, J; Jkeys=Iconnections)
 HIR = hopping_hamiltonian(c, J; Jkeys=IRconnections)
@@ -78,17 +78,19 @@ H = H0 + HIR
 ls = QuantumDots.LindbladSystem(H, leads)
 internal_N = QuantumDots.internal_rep(particle_number, ls)
 current_ops = map(diss -> diss' * internal_N, ls.dissipators)
+R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
+I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
 M = 200
-train_data = generate_training_data(M, rho0, c)
-val_data = generate_training_data(M, rho0, c)
+train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
+val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
 ##
 tspan = (0, 50)
 t_obs = range(0.01, 50, 10)
-timesols = map(rho0 -> time_evolve(deepcopy(rho0), ls, current_ops, tspan, t_obs), train_data.rhos[1:2]);
-@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, current_ops, t_obs), train_data.rhos);
+timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
+@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims
-val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, current_ops, t_obs), val_data.rhos);
+val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims
 ##
 p = plot()
@@ -108,15 +110,15 @@ y = train_data.true_data
 ridge = RidgeRegression(1e-4; fit_intercept=false)
 # ridge = QuantileRegression(; fit_intercept=false)
 W = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
-W2 = inv(X' * X + 1e-12 * I) * X' * y
+W2 = inv(X' * X + 1e-8 * I) * X' * y
 W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 2, perm, W = W2, X = val_observed_data, y = val_data.true_data
+let i = 1, perm, W = W2, X = val_observed_data, y = val_data.true_data
     perm = sortperm(y[:, i])
-    plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw = 3)
-    plot!(y[perm, i], label="truth", lw = 3)
+    plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw=3)
+    plot!(y[perm, i], label="truth", lw=3)
     # plot(y[perm, i], X[perm, :] * W[:, i], label="prediction", title=titles[i])
     # plot!(y[perm, i], y[perm, i], label="truth", ls=:dash)
 end
