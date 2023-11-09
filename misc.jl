@@ -61,9 +61,9 @@ end
 function time_evolve(rho, ls, t_obs; current_ops, occ_ops, kwargs...)
     L = Matrix(ls)
     rhointernal = QuantumDots.internal_rep(rho, ls)
-    f = t -> expv(t, L, rhointernal; kwargs...)
-    rhos = f.(t_obs)
-
+    # f = t -> expv(t, L, rhointernal; kwargs...)
+    # rhos = f.(t_obs)
+    rhos = eachcol(expv_timestep(collect(t_obs), L, rhointernal; kwargs...))
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
 function time_evolve(rho, ls, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
@@ -72,8 +72,8 @@ function time_evolve(rho, ls, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs.
     prob = ODEProblem(drho!, rhointernal, tspan)
     sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
     ts = range(tspan..., 200)
-    currents = reduce(hcat, [[real(sol(t)' * op) for op in current_ops] for t in ts]) |> permutedims
-    observations = reduce(hcat, [get_obs_data(QuantumDots.internal_rep(sol(t), ls), current_ops, occ_ops) for t in ts]) |> permutedims
+    currents = [real(sol(t)' * op) for op in current_ops, t in ts] |> permutedims
+    observations = reduce(hcat, [get_obs_data(sol(t), current_ops, occ_ops) for t in ts]) |> permutedims
     # observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
     return (; ts, sol, currents, observations)
 end

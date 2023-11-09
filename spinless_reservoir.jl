@@ -88,10 +88,10 @@ val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
 tspan = (0, 50)
 t_obs = range(0.01, 50, 10)
 timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
-@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
+@time sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims
-val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
-val_observed_data = reduce(hcat, val_sols) |> permutedims
+val_sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
+val_observed_data = reduce(hcat, val_sols) |> permutedims;
 ##
 p = plot()
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
@@ -115,7 +115,7 @@ W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 1, perm, W = W2, X = val_observed_data, y = val_data.true_data
+let i = 3, perm, W = W2, X = val_observed_data, y = val_data.true_data
     perm = sortperm(y[:, i])
     plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw=3)
     plot!(y[perm, i], label="truth", lw=3)
