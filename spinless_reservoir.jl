@@ -90,7 +90,7 @@ tspan = (0, 10 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
 
 timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
-@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
+@time sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims;
 val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims;
@@ -118,7 +118,7 @@ W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 1:3, perm, W = W2, X = val_observed_data, y = val_data.true_data, b
+let is = 3:8, perm, W = W1, X = val_observed_data, y = val_data.true_data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 2))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
