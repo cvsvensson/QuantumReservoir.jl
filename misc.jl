@@ -1,7 +1,8 @@
-function hopping_hamiltonian(c, J; Jkeys=keys(J))
+function hopping_hamiltonian(c, J, V; labels=keys(J))
     H = deepcopy(1.0 * first(c))
-    for (k1, k2) in Jkeys
+    for (k1, k2) in labels
         H .+= J[(k1, k2)] * c[k1]'c[k2] + hc
+        H .+= V[(k1, k2)] * c[k1]'c[k1] * c[k2]'c[k2]
     end
     return blockdiagonal(H, c)
 end
@@ -41,8 +42,15 @@ end
 function get_target_data(rho, I_n_ops, c)
     occupations = [real(tr(rho * op)) for op in I_n_ops]
     entropy = input_entanglement(rho)
-    purity = real(tr(partial_trace(rho, Ilabels, c)^2))
-    return [entropy, purity, occupations...]
+    rhoI = partial_trace(rho, Ilabels, c)
+    purity = real(tr(rhoI^2))
+    rv = get_rho_vec(rhoI)
+    return [entropy, purity, rv..., occupations...]
+end
+
+function get_rho_vec(rho)
+    @assert size(rho) == (4, 4)
+    [real(diag(rho))..., real(rho[2, 3]), imag(rho[2, 3])]
 end
 
 function input_entanglement(rho, c=c)

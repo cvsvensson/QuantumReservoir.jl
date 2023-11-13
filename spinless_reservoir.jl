@@ -24,16 +24,17 @@ Rconnections = filter(k -> first(k[1]) + first(k[2]) > 1, hopping_labels)
 IRconnections = filter(k -> abs(first(k[1]) - first(k[2])) == 1, hopping_labels)
 ##
 J = random_hoppings(hopping_labels)
-HR = hopping_hamiltonian(c, J; Jkeys=Rconnections)
-HI = hopping_hamiltonian(c, J; Jkeys=Iconnections)
-HIR = hopping_hamiltonian(c, J; Jkeys=IRconnections)
+V = random_hoppings(hopping_labels)
+HR = hopping_hamiltonian(c, J, V; labels=Rconnections)
+HI = hopping_hamiltonian(c, J, V; labels=Iconnections)
+HIR = hopping_hamiltonian(c, J, V; labels=IRconnections)
 
 ##
-Γ = 1e1(I + rand(2, 2))
-μs = [-100,-100]#rand(2)
+Γ = 1e-1(I + rand(2, 2))
+μs = [-1000, -1000]#rand(2)
 T = 10norm(Γ)
 leads = Tuple(CombinedLead((c[N, k]' * sqrt(Γ[k, k]), c[N, mod1(k + 1, 2)]' * sqrt(Γ[k, mod1(k + 1, 2)])); T, μ=μs[k]) for k in 1:2)
-input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-100)
+input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-10000)
 leads0 = (input_dissipator, leads...)
 # leads = (; left=leftlead, right=rightlead)
 
@@ -79,12 +80,13 @@ current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
-M = 200
+M = 100
 train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
 val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
 ##
-tspan = (0, 40)
-t_obs = range(0.1, 5, 3)
+tspan = (0, 10 / (norm(Γ)^1))#*log(norm(Γ)))
+t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
+
 timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
 @time sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims;
@@ -103,24 +105,40 @@ vline!(t_obs)
 p
 
 ## Training
-X = observed_data
+X = observed_data + randn(size(observed_data)) * 1e-3 * mean(abs, observed_data)
 y = train_data.true_data
 
-ridge = RidgeRegression(1e-4; fit_intercept=false)
+ridge = RidgeRegression(1e-8; fit_intercept=true)
 # ridge = QuantileRegression(; fit_intercept=false)
 W = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
 W2 = inv(X' * X + 1e-8 * I) * X' * y
 W3 = pinv(X) * y
 
 ##
-titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 2, perm, W = W2, X = val_observed_data, y = val_data.true_data
-    perm = sortperm(y[:, i])
-    plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw=3)
-    plot!(y[perm, i], label="truth", lw=3)
+# titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
+titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
+# get plots.jl discrete rainbow colors
+# rainbow = cgrad(:rainbow)
+# colors = cgrad(:rainbow)
+let is = 3:10, perm, W = W, X = val_observed_data, y = val_data.true_data, b
+    p = plot()
+    colors = cgrad(:seaborn_dark, size(y, 2))
+    colors2 = cgrad(:seaborn_bright, size(y, 2))
+    for i in is
+        perm = sortperm(y[:, i])
+        Wi, b = size(W, 1) > size(X, 2) ? (W[1:end-1, i], ones(M) * W[end, i]') : (W[:, i], zeros(M))
+        # c = cgrad(:rainbow,10)[i]
+        # println(size(X[perm, :]))
+        # println(size(W))
+        # println(size(b))
+        plot!(p, X[perm, :] * Wi .+ b, label=titles[i] * " pred", lw=3; c=colors[i], frame = :box)
+        plot!(y[perm, i], label=titles[i] * " truth", lw=3, ls=:dash; c=colors2[i])
+    end
+    display(p)
     # plot(y[perm, i], X[perm, :] * W[:, i], label="prediction", title=titles[i])
     # plot!(y[perm, i], y[perm, i], label="truth", ls=:dash)
 end
+
 
 ##
 norm.(eachcol(X * W - y))
