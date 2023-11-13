@@ -22,9 +22,9 @@ function random_nearest_hoppings(labels, s=1)
     Dict(couplings)
 end
 
-function modify_initial_state((rs, θ), rho, c=c; kwargs...)
+function modify_initial_state((rs, θ, ϕ), rho, c=c; kwargs...)
     si, co = sincos(θ)
-    channels = (I, c[0, 1]' * si + co * c[0, 2]', c[0, 1]' * c[0, 2]')
+    channels = (I, c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]', c[0, 1]' * c[0, 2]')
     rhonew = sum(r * L * rho * L' for (L, r) in zip(channels, rs))
     normalize_rho!(rhonew)
     return rhonew
@@ -34,10 +34,11 @@ normalize_rho!(rho) = rdiv!(rho, tr(rho))
 
 function generate_training_data(M, rho, c; occ_ops, Ilabels)
     θ = 2pi * rand(M)
-    rs = 10 * rand(M, 3)
-    rhonew = [modify_initial_state(p, rho) for p in zip(eachrow(rs), θ)]
+    ϕ = 2pi * rand(M)
+    r = 10 * rand(M, 3)
+    rhonew = [modify_initial_state(p, rho) for p in zip(eachrow(r), θ, ϕ)]
     true_data = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhonew)) |> permutedims
-    return (; θ, rs, rhos=rhonew, true_data)
+    return (; θ, ϕ, r, rhos=rhonew, true_data)
 end
 function get_target_data(rho, I_n_ops, c, Ilabels)
     occupations = [real(tr(rho * op)) for op in I_n_ops]

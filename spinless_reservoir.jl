@@ -12,7 +12,7 @@ using CUDA
 
 includet("misc.jl")
 ##
-N = 2
+N = 1
 labels = vec(Base.product(0:N, 1:2) |> collect)
 qn = QuantumDots.fermionnumber
 c = FermionBasis(labels; qn)
@@ -83,8 +83,8 @@ R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
 M = 100
-train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
-val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
+train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
+val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
 ##
 tspan = (0, 10 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
