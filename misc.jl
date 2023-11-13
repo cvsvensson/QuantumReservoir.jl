@@ -31,14 +31,14 @@ end
 
 normalize_rho!(rho) = rdiv!(rho, tr(rho))
 
-function generate_training_data(M, rho, c; occ_ops)
+function generate_training_data(M, rho, c; occ_ops, Ilabels)
     θ = 2pi * rand(M)
     rs = 10 * rand(M, 3)
     rhonew = [modify_initial_state(p, rho) for p in zip(eachrow(rs), θ)]
-    true_data = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c), rhonew)) |> permutedims
+    true_data = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhonew)) |> permutedims
     return (; θ, rs, rhos=rhonew, true_data)
 end
-function get_target_data(rho, I_n_ops, c)
+function get_target_data(rho, I_n_ops, c, Ilabels)
     occupations = [real(tr(rho * op)) for op in I_n_ops]
     entropy = input_entanglement(rho)
     purity = real(tr(partial_trace(rho, Ilabels, c)^2))
@@ -58,22 +58,44 @@ function get_obs_data(rhointernal, current_ops, occ_ops)
     # occ
 end
 
-function time_evolve(rho, ls, t_obs; current_ops, occ_ops, kwargs...)
-    L = Matrix(ls)
-    rhointernal = QuantumDots.internal_rep(rho, ls)
-    # f = t -> expv(t, L, rhointernal; kwargs...)
-    # rhos = f.(t_obs)
-    rhos = eachcol(expv_timestep(collect(t_obs), L, rhointernal; kwargs...))
+_time_evolve(rho, A::SciMLBase.MatrixOperator, t_obs; current_ops, occ_ops, kwargs...) = _time_evolve(rho, A.A, t_obs; current_ops, occ_ops, kwargs...)
+function _time_evolve(rho, A, t_obs; current_ops, occ_ops, kwargs...)
+    rhos = eachcol(expv_timestep(collect(t_obs), A, rho; kwargs...))
+    # rhos = [exponentiate(A, t, rho; kwargs...)[1] for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
-function time_evolve(rho, ls, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
-    rhointernal = QuantumDots.internal_rep(rho, ls)
-    drho!(out, rho, p, t) = mul!(out, ls, rho)
-    prob = ODEProblem(drho!, rhointernal, tspan)
+function _time_evolve(rho, ls::LazyLindbladSystem, t_obs; current_ops, occ_ops, kwargs...)
+    rhos = [exponentiate(ls, t, rho; kwargs...)[1] for t in t_obs]
+    reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
+end
+function time_evolve(rho, ls::LindbladSystem, args...; kwargs...)
+    A = QuantumDots.LinearOperator(ls)
+    time_evolve(LinearOperatorRep(rho, ls), A, args...; kwargs...)
+end
+function time_evolve(rho, A, args...; gpu=false, occ_ops, current_ops, kwargs...)
+    if gpu
+        _time_evolve(cu(rho), MatrixOperator(cu(A.A)), map(arg -> Float32.(arg), args)...; current_ops=cu.(current_ops), occ_ops=cu.(occ_ops), kwargs...)
+    else
+        _time_evolve(rho, A, args...; current_ops, occ_ops, kwargs...)
+    end
+end
+function time_evolve(rho, ls::LazyLindbladSystem, args...; gpu=false, kwargs...)
+    if gpu
+        @warn "GPU not implemented for LazyLindbladSystem"
+    end
+    _time_evolve(rho, ls, args...; kwargs...)
+end
+function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
+    # drho!(out, rho, p, t) = mul!(out, A, rho)
+    prob = ODEProblem(A, rho, tspan)
     sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
     ts = range(tspan..., 200)
-    currents = [real(sol(t)' * op) for op in current_ops, t in ts] |> permutedims
+    currents = [real(tr(sol(t)' * op)) for op in current_ops, t in ts] |> permutedims
     observations = reduce(hcat, [get_obs_data(sol(t), current_ops, occ_ops) for t in ts]) |> permutedims
     # observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
     return (; ts, sol, currents, observations)
 end
+
+QuantumDots.internal_rep(rho, ls::LazyLindbladSystem) = reshape(rho, size(ls.hamiltonian))
+LinearOperatorRep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
+LinearOperatorRep(rho, ::LazyLindbladSystem) = vec(rho)

@@ -8,10 +8,11 @@ using MLJLinearModels
 using OrdinaryDiffEq
 using Statistics
 using Folds
+using CUDA
 
 includet("misc.jl")
 ##
-N = 1
+N = 2
 labels = vec(Base.product(0:N, 1:2) |> collect)
 qn = QuantumDots.fermionnumber
 c = FermionBasis(labels; qn)
@@ -30,10 +31,10 @@ HIR = hopping_hamiltonian(c, J; Jkeys=IRconnections)
 
 ##
 Γ = 1e1(I + rand(2, 2))
-μs = [-100,-100]#rand(2)
+μs = [-1000, -1000]#rand(2)
 T = 10norm(Γ)
 leads = Tuple(CombinedLead((c[N, k]' * sqrt(Γ[k, k]), c[N, mod1(k + 1, 2)]' * sqrt(Γ[k, mod1(k + 1, 2)])); T, μ=μs[k]) for k in 1:2)
-input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-100)
+input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-1000)
 leads0 = (input_dissipator, leads...)
 # leads = (; left=leftlead, right=rightlead)
 
@@ -73,20 +74,21 @@ pretty_print(rhoR0, cR)
 
 ##
 H = H0 + HIR
+ls = QuantumDots.LazyLindbladSystem(H, leads)
 ls = QuantumDots.LindbladSystem(H, leads)
 internal_N = QuantumDots.internal_rep(particle_number, ls)
 current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
-M = 200
-train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
-val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops)
+M = 50
+train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
+val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
 ##
-tspan = (0, 40)
+tspan = (0, 20)
 t_obs = range(0.1, 5, 3)
-timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
-@time sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
+CUDA.@time timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops, gpu=false), train_data.rhos[1:2]);
+CUDA.@time sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops, gpu=false), train_data.rhos);
 observed_data = reduce(hcat, sols) |> permutedims;
 val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims;
@@ -114,7 +116,7 @@ W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
-let i = 2, perm, W = W2, X = val_observed_data, y = val_data.true_data
+let i = 3, perm, W = W2, X = val_observed_data, y = val_data.true_data
     perm = sortperm(y[:, i])
     plot(X[perm, :] * W[:, i], label="pred", title=titles[i], lw=3)
     plot!(y[perm, i], label="truth", lw=3)
