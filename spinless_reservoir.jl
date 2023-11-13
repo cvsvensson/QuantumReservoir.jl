@@ -8,10 +8,11 @@ using MLJLinearModels
 using OrdinaryDiffEq
 using Statistics
 using Folds
+using CUDA
 
 includet("misc.jl")
 ##
-N = 1
+N = 2
 labels = vec(Base.product(0:N, 1:2) |> collect)
 qn = QuantumDots.fermionnumber
 c = FermionBasis(labels; qn)
@@ -74,6 +75,7 @@ pretty_print(rhoR0, cR)
 
 ##
 H = H0 + HIR
+ls = QuantumDots.LazyLindbladSystem(H, leads)
 ls = QuantumDots.LindbladSystem(H, leads)
 internal_N = QuantumDots.internal_rep(particle_number, ls)
 current_ops = map(diss -> diss' * internal_N, ls.dissipators)
