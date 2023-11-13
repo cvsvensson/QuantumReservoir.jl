@@ -112,33 +112,24 @@ y = train_data.true_data
 
 ridge = RidgeRegression(1e-8; fit_intercept=true)
 # ridge = QuantileRegression(; fit_intercept=false)
-W = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
+W1 = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
 W2 = inv(X' * X + 1e-8 * I) * X' * y
 W3 = pinv(X) * y
 
 ##
-# titles = ["entropy of one input dot", "purity of inputs", "n1", "n2"]
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-# get plots.jl discrete rainbow colors
-# rainbow = cgrad(:rainbow)
-# colors = cgrad(:rainbow)
-let is = 3:10, perm, W = W, X = val_observed_data, y = val_data.true_data, b
-    p = plot()
+let is = 1:3, perm, W = W2, X = val_observed_data, y = val_data.true_data, b
+    p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 2))
+    # colors2 = cgrad(:seaborn_dark, size(y, 2))
     colors2 = cgrad(:seaborn_bright, size(y, 2))
     for i in is
         perm = sortperm(y[:, i])
         Wi, b = size(W, 1) > size(X, 2) ? (W[1:end-1, i], ones(M) * W[end, i]') : (W[:, i], zeros(M))
-        # c = cgrad(:rainbow,10)[i]
-        # println(size(X[perm, :]))
-        # println(size(W))
-        # println(size(b))
-        plot!(p, X[perm, :] * Wi .+ b, label=titles[i] * " pred", lw=3; c=colors[i], frame = :box)
-        plot!(y[perm, i], label=titles[i] * " truth", lw=3, ls=:dash; c=colors2[i])
+        plot!(p, X[perm, :] * Wi .+ b; label=titles[i] * " pred", lw=3, c=colors[i], frame=:box)
+        plot!(y[perm, i]; label=titles[i] * " truth", lw=3, ls=:dash, c=colors2[i])
     end
     display(p)
-    # plot(y[perm, i], X[perm, :] * W[:, i], label="prediction", title=titles[i])
-    # plot!(y[perm, i], y[perm, i], label="truth", ls=:dash)
 end
 
 
