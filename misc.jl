@@ -41,13 +41,19 @@ end
 
 normalize_rho!(rho) = rdiv!(rho, tr(rho))
 
-function generate_training_data(M, rho, c; occ_ops, Ilabels)
+function generate_training_parameters(M)
     θ = 2pi * rand(M)
     ϕ = 2pi * rand(M)
     r = 10 * rand(M, 3)
-    rhonew = [modify_initial_state(p, rho) for p in zip(eachrow(r), θ, ϕ)]
-    true_data = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhonew)) |> permutedims
-    return (; θ, ϕ, r, rhos=rhonew, true_data)
+    return (r, θ, ϕ)
+end
+function generate_initial_states((r, θ, ϕ), rho; M=length(r))
+    itr = Iterators.take(zip(eachrow(r), θ, ϕ), M)
+    [modify_initial_state(p, rho) for p in itr]
+end
+function training_data(rhos, c; occ_ops, Ilabels)
+    y = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhos)) |> permutedims
+    return y
 end
 function get_target_data(rho, I_n_ops, c, Ilabels)
     occupations = [real(tr(rho * op)) for op in I_n_ops]

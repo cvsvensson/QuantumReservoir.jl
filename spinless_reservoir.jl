@@ -10,6 +10,8 @@ using Folds
 using Random
 
 Random.seed!(1234)
+training_parameters = generate_training_parameters(1000);
+validation_parameters = generate_training_parameters(1000);
 includet("misc.jl")
 # includet("gpu.jl")
 ##
@@ -27,6 +29,7 @@ IRconnections = filter(k -> abs(first(k[1]) - first(k[2])) == 1, hopping_labels)
 ##
 J = random_hoppings(hopping_labels)
 V = random_hoppings(hopping_labels)
+##
 HR = hopping_hamiltonian(c, J; labels=Rconnections)
 HI = hopping_hamiltonian(c, J; labels=Iconnections)
 HIR = hopping_hamiltonian(c, J; labels=IRconnections)
@@ -87,16 +90,19 @@ R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
 M = 200
-train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
-val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
+training_rho0s = generate_initial_states(training_parameters, rho0; M)
+validation_rho0s = generate_initial_states(validation_parameters, rho0; M)
+train_data = training_data(training_rho0s, c; occ_ops=I_occ_ops, Ilabels)
+val_data = training_data(validation_rho0s, c; occ_ops=I_occ_ops, Ilabels)
+# val_data = generate_training_data(training_parameters, rho0, c; occ_ops=I_occ_ops, Ilabels)
 ##
 tspan = (0, 4 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
 
-timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
-@time sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos);
+timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), training_rho0s[1:2]);
+@time sols = map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), training_rho0s);
 observed_data = reduce(hcat, sols) |> permutedims;
-val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
+val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), validation_rho0s);
 val_observed_data = reduce(hcat, val_sols) |> permutedims;
 ##
 p = plot();
@@ -111,7 +117,7 @@ p
 
 ## Training
 X = observed_data + randn(size(observed_data)) * 1e-3 * mean(abs, observed_data)
-y = train_data.true_data
+y = train_data
 
 ridge = RidgeRegression(1e-8; fit_intercept=true)
 # ridge = QuantileRegression(; fit_intercept=false)
@@ -121,7 +127,7 @@ W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 3:10, perm, W = W1, X = val_observed_data, y = val_data.true_data, b
+let is = 3:10, perm, W = W1, X = val_observed_data, y = val_data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 2))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
