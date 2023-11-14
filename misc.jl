@@ -1,7 +1,16 @@
-function hopping_hamiltonian(c, J, V; labels=keys(J))
+abstract type AbstractPU end
+struct CPU <: AbstractPU end
+
+function hopping_hamiltonian(c, J; labels=keys(J))
     H = deepcopy(1.0 * first(c))
     for (k1, k2) in labels
         H .+= J[(k1, k2)] * c[k1]'c[k2] + hc
+    end
+    return blockdiagonal(H, c)
+end
+function coulomb_hamiltonian(c, V; labels=keys(V))
+    H = deepcopy(1.0 * first(c))
+    for (k1, k2) in labels
         H .+= V[(k1, k2)] * c[k1]'c[k1] * c[k2]'c[k2]
     end
     return blockdiagonal(H, c)
@@ -61,7 +70,7 @@ end
 
 function get_obs_data(rhointernal, current_ops, occ_ops)
     cur = [real(rhointernal' * op) for op in current_ops]
-    occ = [real(rhointernal' * op) for op in occ_ops]
+    # occ = [real(rhointernal' * op) for op in occ_ops]
     # vcat(cur, occ)
     cur
     # occ
@@ -77,22 +86,9 @@ function _time_evolve(rho, ls::LazyLindbladSystem, t_obs; current_ops, occ_ops, 
     rhos = [exponentiate(ls, t, rho; kwargs...)[1] for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
-function time_evolve(rho, ls::LindbladSystem, args...; kwargs...)
+function time_evolve(rho, ls, args...; kwargs...)
     A = QuantumDots.LinearOperator(ls)
-    time_evolve(LinearOperatorRep(rho, ls), A, args...; kwargs...)
-end
-function time_evolve(rho, A, args...; gpu=false, occ_ops, current_ops, kwargs...)
-    if gpu
-        _time_evolve(cu(rho), MatrixOperator(cu(A.A)), map(arg -> Float32.(arg), args)...; current_ops=cu.(current_ops), occ_ops=cu.(occ_ops), kwargs...)
-    else
-        _time_evolve(rho, A, args...; current_ops, occ_ops, kwargs...)
-    end
-end
-function time_evolve(rho, ls::LazyLindbladSystem, args...; gpu=false, kwargs...)
-    if gpu
-        @warn "GPU not implemented for LazyLindbladSystem"
-    end
-    _time_evolve(rho, ls, args...; kwargs...)
+    _time_evolve(LinearOperatorRep(rho, ls), A, args...; kwargs...)
 end
 function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
     # drho!(out, rho, p, t) = mul!(out, A, rho)
@@ -100,8 +96,8 @@ function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs.
     sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
     ts = range(tspan..., 200)
     currents = [real(tr(sol(t)' * op)) for op in current_ops, t in ts] |> permutedims
-    observations = reduce(hcat, [get_obs_data(sol(t), current_ops, occ_ops) for t in ts]) |> permutedims
-    # observations = reduce(vcat, [get_obs_data(sol(t), current_ops) for t in t_obs])
+    # observations = reduce(hcat, [get_obs_data(sol(t), current_ops, occ_ops) for t in ts]) |> permutedims
+    observations = reduce(vcat, [get_obs_data(sol(t), current_ops, occ_ops) for t in t_obs])
     return (; ts, sol, currents, observations)
 end
 

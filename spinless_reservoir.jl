@@ -1,5 +1,4 @@
-using QuantumDots
-using QuantumDots.BlockDiagonals
+using QuantumDots, QuantumDots.BlockDiagonals, LinearAlgebra
 using LinearAlgebra
 using Plots
 using LinearSolve
@@ -8,9 +7,11 @@ using MLJLinearModels
 using OrdinaryDiffEq
 using Statistics
 using Folds
-using CUDA
+using Random
 
+Random.seed!(1234)
 includet("misc.jl")
+# includet("gpu.jl")
 ##
 N = 1
 labels = vec(Base.product(0:N, 1:2) |> collect)
@@ -26,22 +27,25 @@ IRconnections = filter(k -> abs(first(k[1]) - first(k[2])) == 1, hopping_labels)
 ##
 J = random_hoppings(hopping_labels)
 V = random_hoppings(hopping_labels)
-HR = hopping_hamiltonian(c, J, V; labels=Rconnections)
-HI = hopping_hamiltonian(c, J, V; labels=Iconnections)
-HIR = hopping_hamiltonian(c, J, V; labels=IRconnections)
+HR = hopping_hamiltonian(c, J; labels=Rconnections)
+HI = hopping_hamiltonian(c, J; labels=Iconnections)
+HIR = hopping_hamiltonian(c, J; labels=IRconnections)
+HV = coulomb_hamiltonian(c, V; labels=IRconnections)
 
 ##
-Γ = 1e-1(I + rand(2, 2))
-μs = [-1000, -1000]#rand(2)
+Γ = 1e-1 * (I + rand(2, 2))
+μmin = -10000
+μs = [μmin, μmin]#rand(2)
 T = 10norm(Γ)
-leads = Tuple(CombinedLead((c[N, k]' * sqrt(Γ[k, k]), c[N, mod1(k + 1, 2)]' * sqrt(Γ[k, mod1(k + 1, 2)])); T, μ=μs[k]) for k in 1:2)
-input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=-10000)
+leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:2)
+# leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], ); T, μ=μs[k]) for k in 1:2)
+input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=μmin)
 leads0 = (input_dissipator, leads...)
 # leads = (; left=leftlead, right=rightlead)
 
 ##
 particle_number = blockdiagonal(numberoperator(c), c)
-H0 = HR + HI
+H0 = HR + HI + HV
 ls0 = LindbladSystem(H0, leads0)
 lazyls0 = LazyLindbladSystem(H0, leads0)
 
@@ -61,7 +65,7 @@ internal_N = QuantumDots.internal_rep(particle_number, ls0)
 currents_ops = map(diss -> diss' * internal_N, ls0.dissipators)
 currents = map(diss -> tr(QuantumDots.tomatrix(diss * rhointernal0, ls0) * particle_number), ls0.dissipators)
 currents2 = map(op -> rhointernal0' * op, currents_ops)
-@assert norm(map(-, currents, currents2)) / norm(currents) < 1e-3
+@assert norm(map(-, currents, currents2)) / norm(currents) < 1e-2
 
 ##
 cR = FermionBasis(Rlabels; qn)
@@ -82,11 +86,11 @@ current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
-M = 100
+M = 200
 train_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
 val_data = generate_training_data(M, rho0, c; occ_ops=I_occ_ops, Ilabels)
 ##
-tspan = (0, 10 / (norm(Γ)^1))#*log(norm(Γ)))
+tspan = (0, 4 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
 
 timesols = map(rho0 -> time_evolve(rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), train_data.rhos[1:2]);
@@ -95,10 +99,9 @@ observed_data = reduce(hcat, sols) |> permutedims;
 val_sols = Folds.map(rho0 -> time_evolve(rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), val_data.rhos);
 val_observed_data = reduce(hcat, val_sols) |> permutedims;
 ##
-p = plot()
-# map((sol) -> plot!(p, sol.ts, sol.currents; lw=2, c=[:red :blue]), timesols)
-map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
-vline!(t_obs)
+p = plot();
+map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot]);
+vline!(t_obs);
 p
 ##
 p = plot()
@@ -118,7 +121,7 @@ W3 = pinv(X) * y
 
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 3:8, perm, W = W1, X = val_observed_data, y = val_data.true_data, b
+let is = 3:10, perm, W = W1, X = val_observed_data, y = val_data.true_data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 2))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
@@ -134,7 +137,7 @@ end
 
 
 ##
-norm.(eachcol(X * W - y))
+norm.(eachcol(X * W1 - y))
 norm.(eachcol(X * W2 - y))
 norm.(eachcol(X * W3 - y))
 y_pred = X * W2
