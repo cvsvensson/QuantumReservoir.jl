@@ -75,8 +75,8 @@ function input_entanglement(rho, c=c)
 end
 
 function get_obs_data(rhointernal, current_ops, occ_ops)
-    cur = [real(rhointernal' * op) for op in current_ops]
-    # occ = [real(rhointernal' * op) for op in occ_ops]
+    cur = [real(tr(rhointernal' * op)) for op in current_ops]
+    # occ = [real(tr(rhointernal' * op)) for op in occ_ops]
     # vcat(cur, occ)
     cur
     # occ
@@ -85,16 +85,20 @@ end
 _time_evolve(rho, A::SciMLBase.MatrixOperator, t_obs; current_ops, occ_ops, kwargs...) = _time_evolve(rho, A.A, t_obs; current_ops, occ_ops, kwargs...)
 function _time_evolve(rho, A, t_obs; current_ops, occ_ops, kwargs...)
     rhos = eachcol(expv_timestep(collect(t_obs), A, rho; kwargs...))
-    # rhos = [exponentiate(A, t, rho; kwargs...)[1] for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
+using KrylovKit
 function _time_evolve(rho, ls::LazyLindbladSystem, t_obs; current_ops, occ_ops, kwargs...)
     rhos = [exponentiate(ls, t, rho; kwargs...)[1] for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
-function time_evolve(rho, ls, args...; kwargs...)
+time_evolve(proc::CPU, args...; kwargs...) = time_evolve(args...; kwargs...)
+function time_evolve(rho, ls::LindbladSystem, args...; kwargs...)
     A = QuantumDots.LinearOperator(ls)
-    _time_evolve(LinearOperatorRep(rho, ls), A, args...; kwargs...)
+    _time_evolve(vecrep(rho, ls), A, args...; kwargs...)
+end
+function time_evolve(rho, ls::LazyLindbladSystem, args...; kwargs...)
+    _time_evolve(rho, ls, args...; kwargs...)
 end
 function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
     # drho!(out, rho, p, t) = mul!(out, A, rho)
@@ -108,5 +112,8 @@ function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs.
 end
 
 QuantumDots.internal_rep(rho, ls::LazyLindbladSystem) = reshape(rho, size(ls.hamiltonian))
-LinearOperatorRep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
-LinearOperatorRep(rho, ::LazyLindbladSystem) = vec(rho)
+# LinearOperatorRep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
+# LinearOperatorRep(rho, ::LazyLindbladSystem) = vec(rho)
+
+vecrep(rho, ls::LazyLindbladSystem) = vec(rho)
+vecrep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
