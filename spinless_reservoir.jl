@@ -13,7 +13,7 @@ includet("misc.jl")
 Random.seed!(1234)
 training_parameters = generate_training_parameters(1000);
 validation_parameters = generate_training_parameters(1000);
-includet("gpu.jl")
+#includet("gpu.jl")
 ##
 N = 1
 labels = vec(Base.product(0:N, 1:2) |> collect)
@@ -36,12 +36,12 @@ HIR = hopping_hamiltonian(c, J; labels=IRconnections)
 HV = coulomb_hamiltonian(c, V; labels=IRconnections)
 
 ##
-Γ = 1e-1 * (I + rand(2, 2))
+Γ = 1e1 * (rand(2, 2))
 μmin = -10000
 μs = [μmin, μmin]#rand(2)
 T = 10norm(Γ)
-leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:2)
-# leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], ); T, μ=μs[k]) for k in 1:2)
+# leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:1)
+leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], ); T, μ=μs[k]) for k in 1:1)
 input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=μmin)
 leads0 = (input_dissipator, leads...)
 
@@ -95,7 +95,7 @@ train_data = training_data(training_rho0s, c; occ_ops=I_occ_ops, Ilabels)
 val_data = training_data(validation_rho0s, c; occ_ops=I_occ_ops, Ilabels)
 
 ##
-tspan = (0, 4 / (norm(Γ)^1))#*log(norm(Γ)))
+tspan = (0, 100 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
 proc = CPU();
 timesols = map(rho0 -> time_evolve(proc, rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), training_rho0s[1:2]);
@@ -124,7 +124,7 @@ W2 = inv(X' * X + 1e-8 * I) * X' * y
 W3 = pinv(X) * y
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 3:10, perm, W = W1, X = val_observed_data, y = val_data, b
+let is = 1:10, perm, W = W1, X = val_observed_data, y = val_data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 2))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
