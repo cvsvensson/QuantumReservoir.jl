@@ -41,9 +41,13 @@ HV = coulomb_hamiltonian(c, V; labels=IRconnections)
 μs = [μmin, μmin]#rand(2)
 T = 10norm(Γ)
 # leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:1)
-leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], ); T, μ=μs[k]) for k in 1:1)
+leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)],); T, μ=μs[k]) for k in 1:1)
 input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=μmin)
 leads0 = (input_dissipator, leads...)
+
+##
+H0 = HR + HI + HV
+reservoir = QuantumReservoir(H0, H0 + HIR, leads0, leads, c, Ilabels, Rlabels);
 
 ##
 particle_number = blockdiagonal(numberoperator(c), c)
@@ -89,42 +93,33 @@ R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
 M = 100
-training_rho0s = generate_initial_states(training_parameters, rho0; M)
-validation_rho0s = generate_initial_states(validation_parameters, rho0; M)
-train_data = training_data(training_rho0s, c; occ_ops=I_occ_ops, Ilabels)
-val_data = training_data(validation_rho0s, c; occ_ops=I_occ_ops, Ilabels)
+training_ensemble = InitialEnsemble(training_parameters[1:M], reservoir)
+test_ensemble = InitialEnsemble(training_parameters[M+1:2M], reservoir)
 
 ##
 tspan = (0, 100 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
 proc = CPU();
-timesols = map(rho0 -> time_evolve(proc, rho0, ls, tspan, t_obs; current_ops, occ_ops=R_occ_ops), training_rho0s[1:2]);
-@time sols = map(rho0 -> time_evolve(proc, rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), training_rho0s);
-observed_data = reduce(hcat, sols) |> permutedims;
-
-val_sols = map(rho0 -> time_evolve(proc, rho0, ls, t_obs; current_ops, occ_ops=R_occ_ops), validation_rho0s);
-val_observed_data = reduce(hcat, val_sols) |> permutedims;
+@time timesols = time_evolve(reservoir, training_ensemble[1:2], tspan, t_obs; proc);
+@time training_sols = time_evolve(reservoir, training_ensemble, t_obs; proc);
+@time test_sols = time_evolve(reservoir, test_ensemble, t_obs; proc);
 ##
 p = plot();
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot]);
 vline!(t_obs);
 p
-##
-p = plot()
-map((sol, ls) -> plot!(p, sol.ts, sol.observations; ls, lw=2, c=[:red :blue]), timesols, [:solid, :dash, :dashdot])
-vline!(t_obs)
-p
 
 ## Training
-X = observed_data + randn(size(observed_data)) * 1e-3 * mean(abs, observed_data)
-y = train_data
+X = training_sols.data 
+X .+= randn(size(X)) * 1e-3 * mean(abs, X)
+y = training_ensemble.data
 ridge = RidgeRegression(1e-8; fit_intercept=true)
 W1 = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
 W2 = inv(X' * X + 1e-8 * I) * X' * y
 W3 = pinv(X) * y
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 1:10, perm, W = W1, X = val_observed_data, y = val_data, b
+let is = 1:10, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 2))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
@@ -137,3 +132,17 @@ let is = 1:10, perm, W = W1, X = val_observed_data, y = val_data, b
     end
     display(p)
 end
+
+##
+function loss_function(W, X, y)
+    loss = 0.0
+    M = size(y, 1)
+    for i in axes(W, 2)
+        Wi, b = size(W, 1) > size(X, 2) ? (W[1:end-1, i], ones(M) * W[end, i]') : (W[:, i], zeros(M))
+        loss += sum(abs2, X * Wi .- y .+ b)
+    end
+    return sqrt(loss) / size(X, 2)
+end
+loss_function(W1, test_sols.data, test_ensemble.data)
+
+##

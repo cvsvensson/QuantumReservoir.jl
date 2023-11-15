@@ -45,11 +45,11 @@ function generate_training_parameters(M)
     θ = 2pi * rand(M)
     ϕ = 2pi * rand(M)
     r = 10 * rand(M, 3)
-    return (r, θ, ϕ)
+    return collect(zip(eachrow(r), θ, ϕ))
 end
-function generate_initial_states((r, θ, ϕ), rho; M=length(r))
-    itr = Iterators.take(zip(eachrow(r), θ, ϕ), M)
-    [modify_initial_state(p, rho) for p in itr]
+function generate_initial_states(ps, rho)
+    # itr = Iterators.take(zip(eachrow(r), θ, ϕ), M)
+    [modify_initial_state(p, rho) for p in ps]
 end
 function training_data(rhos, c; occ_ops, Ilabels)
     y = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhos)) |> permutedims
@@ -117,3 +117,59 @@ QuantumDots.internal_rep(rho, ls::LazyLindbladSystem) = reshape(rho, size(ls.ham
 
 vecrep(rho, ls::LazyLindbladSystem) = vec(rho)
 vecrep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
+
+
+struct QuantumReservoir{H,L0,L,LS0,LS,P,Pi,B,C,R,I,IL,RL}
+    H0::H
+    H::H
+    leads0::L0
+    leads::L
+    ls0::LS0
+    ls::LS
+    rho0::P
+    rhointernal0::Pi
+    c::B
+    current_ops::C
+    R_occ_ops::R
+    I_occ_ops::I
+    Ilabels::IL
+    Rlabels::RL
+end
+function QuantumReservoir(H0::h, H::h, leads0::L0, leads::L, c::B, Ilabels::IL, Rlabels::RL) where {h,L0,L,B,IL,RL}
+    particle_number = blockdiagonal(numberoperator(c), c)
+    ls0 = LindbladSystem(H0, leads0)
+    prob0 = StationaryStateProblem(ls0)
+    rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
+    rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
+    @assert isapprox(tr(rho0), 1; atol=1e-3)
+    ls = LindbladSystem(H, leads)
+    internal_N = QuantumDots.internal_rep(particle_number, ls)
+    current_ops = map(diss -> diss' * internal_N, ls.dissipators)
+    R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
+    I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
+    QuantumReservoir{h,L0,L,typeof(ls0),typeof(ls),typeof(rho0),typeof(rhointernal0),B,typeof(current_ops),typeof(R_occ_ops),typeof(I_occ_ops),IL,RL}(H0, H, leads0, leads, ls0, ls, rho0, rhointernal0, c, current_ops, R_occ_ops, I_occ_ops, Ilabels, Rlabels)
+end
+
+struct InitialEnsemble{P,D}
+    rho0s::P
+    data::D
+end
+function InitialEnsemble(parameters, res::QuantumReservoir)
+    rho0s = generate_initial_states(parameters, res.rho0)
+    data = training_data(rho0s, res.c; occ_ops=res.I_occ_ops, Ilabels=res.Ilabels)
+    InitialEnsemble{typeof(rho0s),typeof(data)}(rho0s, data)
+end
+
+function time_evolve(res, rho0, tspan, t_obs, proc=CPU())
+    time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops)
+end
+function time_evolve(res, ens::InitialEnsemble, tspan, t_obs; proc=CPU())
+    map(rho0 -> time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops), ens.rho0s)
+end
+function time_evolve(res, ens::InitialEnsemble, t_obs; proc=CPU())
+    sols = map(rho0 -> time_evolve(proc, rho0, res.ls, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops), ens.rho0s)
+    data = reduce(hcat, sols) |> permutedims
+    return (; sols, data)
+end
+
+Base.getindex(ens::InitialEnsemble, I) = InitialEnsemble(ens.rho0s[I], ens.data[I, :])
