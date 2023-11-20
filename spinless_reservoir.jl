@@ -92,13 +92,13 @@ current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
 ##
-M = 100
+M = 400
 training_ensemble = InitialEnsemble(training_parameters[1:M], reservoir)
 test_ensemble = InitialEnsemble(training_parameters[M+1:2M], reservoir)
 
 ##
 tspan = (0, 100 / (norm(Γ)^1))#*log(norm(Γ)))
-t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 5)
+t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
 proc = CPU();
 @time timesols = time_evolve(reservoir, training_ensemble[1:2], tspan, t_obs; proc);
 @time training_sols = time_evolve(reservoir, training_ensemble, t_obs; proc);
@@ -111,15 +111,15 @@ p
 
 ## Training
 X = training_sols.data
-X .+= randn(size(X)) * 1e-3 * mean(abs, X)
+X .+= 0randn(size(X)) * 1e-3 * mean(abs, X)
 y = training_ensemble.data
-ridge = RidgeRegression(1e-8; fit_intercept=true)
+ridge = RidgeRegression(1e-6; fit_intercept=true)
 W1 = reduce(hcat, map(data -> fit(ridge, X', data), eachrow(y))) |> permutedims
 W2 = y * X' * inv(X * X' + 1e-8 * I)
 W3 = y * pinv(X)
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 3:3, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
+let is = 1:6, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 1))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
