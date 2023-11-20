@@ -98,7 +98,7 @@ test_ensemble = InitialEnsemble(training_parameters[M+1:2M], reservoir)
 
 ##
 tspan = (0, 100 / (norm(Γ)^1))#*log(norm(Γ)))
-t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 10)
+t_obs = range(0.1 / norm(Γ), tspan[end] / 2, 5)
 proc = CPU();
 @time timesols = time_evolve(reservoir, training_ensemble[1:2], tspan, t_obs; proc);
 @time training_sols = time_evolve(reservoir, training_ensemble, t_obs; proc);
@@ -110,25 +110,25 @@ vline!(t_obs);
 p
 
 ## Training
-X = training_sols.data 
+X = training_sols.data
 X .+= randn(size(X)) * 1e-3 * mean(abs, X)
 y = training_ensemble.data
 ridge = RidgeRegression(1e-8; fit_intercept=true)
-W1 = reduce(hcat, map(data -> fit(ridge, X, data), eachcol(y)))
-W2 = inv(X' * X + 1e-8 * I) * X' * y
-W3 = pinv(X) * y
+W1 = reduce(hcat, map(data -> fit(ridge, X', data), eachrow(y))) |> permutedims
+W2 = y * X' * inv(X * X' + 1e-8 * I)
+W3 = y * pinv(X)
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 1:10, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
+let is = 3:3, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
     p = plot(; size=1.2 .* (600, 400))
-    colors = cgrad(:seaborn_dark, size(y, 2))
+    colors = cgrad(:seaborn_dark, size(y, 1))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
-    colors2 = cgrad(:seaborn_bright, size(y, 2))
+    colors2 = cgrad(:seaborn_bright, size(y, 1))
     for i in is
-        perm = sortperm(y[:, i])
-        Wi, b = size(W, 1) > size(X, 2) ? (W[1:end-1, i], ones(M) * W[end, i]') : (W[:, i], zeros(M))
-        plot!(p, X[perm, :] * Wi .+ b; label=titles[i] * " pred", lw=3, c=colors[i], frame=:box)
-        plot!(y[perm, i]; label=titles[i] * " truth", lw=3, ls=:dash, c=colors2[i])
+        perm = sortperm(y[i, :])
+        Wi, b = size(W, 2) > size(X, 1) ? (W[i, 1:end-1], W[i, end] * ones(M)) : (W[i, :], zeros(M))
+        plot!(p, (Wi' * X[:, perm])' .+ b; label=titles[i] * " pred", lw=3, c=colors[i], frame=:box)
+        plot!(y[i, perm]; label=titles[i] * " truth", lw=3, ls=:dash, c=colors2[i])
     end
     display(p)
 end

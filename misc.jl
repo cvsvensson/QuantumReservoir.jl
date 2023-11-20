@@ -52,7 +52,7 @@ function generate_initial_states(ps, rho)
     [modify_initial_state(p, rho) for p in ps]
 end
 function training_data(rhos, c; occ_ops, Ilabels)
-    y = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhos)) |> permutedims
+    y = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhos))
     return y
 end
 function get_target_data(rho, I_n_ops, c, Ilabels)
@@ -168,7 +168,7 @@ function time_evolve(res, ens::InitialEnsemble, tspan, t_obs; proc=CPU())
 end
 function time_evolve(res, ens::InitialEnsemble, t_obs; proc=CPU())
     sols = map(rho0 -> time_evolve(proc, rho0, res.ls, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops), ens.rho0s)
-    data = reduce(hcat, sols) |> permutedims
+    data = reduce(hcat, sols)
     return (; sols, data)
 end
 
