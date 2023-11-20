@@ -7,6 +7,13 @@ function get_model(y, W)
         Dense(n => n, tanh; bias=true),
         Dense(n => size(y, 1)))
 end
+function get_model2(y, W)
+    n = size(W, 1)
+    return Chain(
+        Dense(n => n),
+        Dense(n => n, tanh; bias=true),
+        Dense(n => size(y, 1)))
+end
 
 X2 = Float32.([X; ones(M)'])
 X2 = Float32.(X)
@@ -18,7 +25,7 @@ optim = Flux.setup(OptimiserChain(WeightDecay(1.0f-12), Adam(0.001)), model)
 ##
 # Training loop, using the whole data set 1000 times:
 losses = []
-@showprogress for epoch in 1:1_000_0
+@showprogress for epoch in 1:2_000_0
     for (x, y) in loader
         _loss, grads = Flux.withgradient(model) do m
             # Evaluate model and loss inside gradient context:
