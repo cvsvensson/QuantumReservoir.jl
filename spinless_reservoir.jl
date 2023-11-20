@@ -29,25 +29,29 @@ IRconnections = filter(k -> abs(first(k[1]) - first(k[2])) == 1, hopping_labels)
 ##
 J = random_hoppings(hopping_labels)
 V = random_hoppings(hopping_labels)
+J = one_hoppings(hopping_labels)
+V = one_hoppings(hopping_labels, 1)
 ##
 HR = hopping_hamiltonian(c, J; labels=Rconnections)
 HI = hopping_hamiltonian(c, J; labels=Iconnections)
 HIR = hopping_hamiltonian(c, J; labels=IRconnections)
-HV = coulomb_hamiltonian(c, V; labels=IRconnections)
-
-##
-Γ = 1e1 * (rand(2, 2))
-μmin = -10000
-μs = [μmin, μmin]#rand(2)
-T = 10norm(Γ)
-# leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:1)
-leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)],); T, μ=μs[k]) for k in 1:1)
-input_dissipator = CombinedLead((c[0, 1]', c[0, 2]'); T, μ=μmin)
-leads0 = (input_dissipator, leads...)
-
-##
+HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
 H0 = HR + HI + HV
-reservoir = QuantumReservoir(H0, H0 + HIR, leads0, leads, c, Ilabels, Rlabels);
+H = H0 + HIR
+# vals,vecs = eigen(Matrix(H))
+##
+Γ = I #1e1 * (rand(2, 2))
+μmin = 1
+μs = [μmin, μmin]#rand(2)
+T = 1#norm(Γ)
+# leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:1)
+leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], ); T, μ=μs[k]) for k in 1:2)
+input_dissipator = CombinedLead((c[0, 1]',); T, μ=μmin)
+input_dissipator2 = CombinedLead((c[0, 2]',); T, μ=μmin)
+leads0 = (input_dissipator, input_dissipator2, leads...)
+
+ls = LindbladSystem(H, leads0)
+vals,vecs = eigen(Matrix(ls.total))
 
 ##
 particle_number = blockdiagonal(numberoperator(c), c)

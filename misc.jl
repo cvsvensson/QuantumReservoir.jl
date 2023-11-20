@@ -22,6 +22,10 @@ is_nearest_neighbours(k1, k2) = k1 != k2 && abs(first(k1) - first(k2)) ∈ (0, 1
 #     Dict(couplings)
 # end
 
+function one_hoppings(labels, s=1)
+    couplings = [(k1, k2) => s * 1.0 for (k1, k2) in labels]
+    Dict(couplings)
+end
 function random_hoppings(labels, s=1)
     couplings = [(k1, k2) => s * rand() for (k1, k2) in labels]
     Dict(couplings)
