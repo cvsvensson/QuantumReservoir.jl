@@ -1,24 +1,26 @@
 using Flux, Statistics, ProgressMeter, Plots
 
 function get_model(y, W)
-    n = size(W, 1)
+    n = size(W, 2) - 1
+    m = size(W, 1)
     return Chain(
         Dense(W[:, 1:end-1], W[:, end]),
-        Dense(n => n, tanh; bias=true),
-        Dense(n => size(y, 1)))
+        Dense(m => m, tanh; bias=true),
+        Dense(m => size(y, 1)))
 end
 function get_model2(y, W)
-    n = size(W, 1)
+    n = size(W, 2) - 1
+    m = size(W, 1)
     return Chain(
-        Dense(n => n),
-        Dense(n => n, tanh; bias=true),
-        Dense(n => size(y, 1)))
+        Dense(n => m),
+        Dense(m => m, tanh; bias=true),
+        Dense(m => size(y, 1)))
 end
 
-X2 = Float32.([X; ones(M)'])
+# X2 = Float32.([X; ones(M)'])
 X2 = Float32.(X)
 y2 = Float32.(y[1:2, :])
-model = get_model(y2, Float32.(W1))
+model = get_model2(y2, Float32.(W1))
 loader = Flux.DataLoader((X2, y2), batchsize=100, shuffle=true);
 # optim = Flux.setup(Flux.Adam(0.001), model)
 optim = Flux.setup(OptimiserChain(WeightDecay(1.0f-12), Adam(0.001)), model)
@@ -39,7 +41,7 @@ end
 
 ##
 plot(losses; xaxis=(:log10, "iteration"),
-    yaxis="loss", label="per batch")
+    yaxis="loss", label="per batch");
 n = length(loader)
 plot!(n:n:length(losses), mean.(Iterators.partition(losses, n)),
     label="epoch mean", dpi=200)

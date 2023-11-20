@@ -16,7 +16,7 @@ function coulomb_hamiltonian(c, V; labels=keys(V))
     return blockdiagonal(H, c)
 end
 
-is_nearest_neighbours(k1, k2) = k1 != k2 && abs(first(k1) - first(k2)) ∈ (0, 1)
+is_nearest_neighbours(k1, k2) = k1 != k2 && all(map((l1, l2) -> abs(l1 - l2) ∈ (0, 1), k1, k2))
 # function random_nearest_hoppings(spatial_labels, s=1)
 #     couplings = [(k1, k2) => s * rand() * is_nearest_neighbours(k1, k2) for k1 in spatial_labels, k2 in spatial_labels]
 #     Dict(couplings)
@@ -37,7 +37,8 @@ end
 
 function modify_initial_state((rs, θ, ϕ), rho, c=c; kwargs...)
     si, co = sincos(θ)
-    channels = (I, c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]', c[0, 1]' * c[0, 2]')
+    # channels = (I, c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]', c[0, 1]' * c[0, 2]')
+    channels = (c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]',)
     rhonew = sum(r * L * rho * L' for (L, r) in zip(channels, rs))
     normalize_rho!(rhonew)
     return rhonew
@@ -69,8 +70,16 @@ function get_target_data(rho, I_n_ops, c, Ilabels)
 end
 
 function get_rho_vec(rho)
-    @assert size(rho) == (4, 4)
-    [real(diag(rho))..., real(rho[2, 3]), imag(rho[2, 3])]
+    if size(rho) == (4, 4)
+        return [real(diag(rho))..., real(rho[2, 3]), imag(rho[2, 3])]
+    end
+    if size(rho) == (8, 8)
+        utri = triu!(trues(4, 4), 1)
+        rho1 = rho[2:5, 2:5][utri]
+        utri2 = triu!(trues(2, 2), 1)
+        rho2 = rho[6:7, 6:7][utri2]
+        return [real(diag(rho))..., real(rho1)..., imag(rho1)..., real(rho2)..., imag(rho2)...]
+    end
 end
 
 function input_entanglement(rho, c=c)
@@ -104,10 +113,10 @@ end
 function time_evolve(rho, ls::LazyLindbladSystem, args...; kwargs...)
     _time_evolve(rho, ls, args...; kwargs...)
 end
-function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, kwargs...)
+function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, alg=ROCK4(), kwargs...)
     # drho!(out, rho, p, t) = mul!(out, A, rho)
     prob = ODEProblem(A, rho, tspan)
-    sol = solve(prob, Tsit5(); abstol=1e-3, kwargs...)
+    sol = solve(prob, alg; abstol=1e-3, kwargs...)
     ts = range(tspan..., 200)
     currents = [real(tr(sol(t)' * op)) for op in current_ops, t in ts] |> permutedims
     # observations = reduce(hcat, [get_obs_data(sol(t), current_ops, occ_ops) for t in ts]) |> permutedims
@@ -143,9 +152,11 @@ function QuantumReservoir(H0::h, H::h, leads0::L0, leads::L, c::B, Ilabels::IL, 
     particle_number = blockdiagonal(numberoperator(c), c)
     ls0 = LindbladSystem(H0, leads0)
     prob0 = StationaryStateProblem(ls0)
-    rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
+    rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-12)
     rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
-    @assert isapprox(tr(rho0), 1; atol=1e-3)
+    normalize_rho!(rho0)
+    rhointernal0 = vecrep(rho0, ls0)
+    @assert isapprox(tr(rho0), 1; atol=1e-3) "tr(ρ) = $(tr(rho0)) != 1"
     ls = LindbladSystem(H, leads)
     internal_N = QuantumDots.internal_rep(particle_number, ls)
     current_ops = map(diss -> diss' * internal_N, ls.dissipators)
@@ -164,14 +175,14 @@ function InitialEnsemble(parameters, res::QuantumReservoir)
     InitialEnsemble{typeof(rho0s),typeof(data)}(rho0s, data)
 end
 
-function time_evolve(res, rho0, tspan, t_obs, proc=CPU())
-    time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops)
+function time_evolve(res, rho0, tspan, t_obs, proc=CPU(), kwargs...)
+    time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...)
 end
-function time_evolve(res, ens::InitialEnsemble, tspan, t_obs; proc=CPU())
-    map(rho0 -> time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops), ens.rho0s)
+function time_evolve(res, ens::InitialEnsemble, tspan, t_obs; proc=CPU(), kwargs...)
+    map(rho0 -> time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...), ens.rho0s)
 end
-function time_evolve(res, ens::InitialEnsemble, t_obs; proc=CPU())
-    sols = map(rho0 -> time_evolve(proc, rho0, res.ls, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops), ens.rho0s)
+function time_evolve(res, ens::InitialEnsemble, t_obs; proc=CPU(), kwargs...)
+    sols = map(rho0 -> time_evolve(proc, rho0, res.ls, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...), ens.rho0s)
     data = reduce(hcat, sols)
     return (; sols, data)
 end
