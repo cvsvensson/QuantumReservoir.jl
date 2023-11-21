@@ -2,16 +2,26 @@ abstract type AbstractPU end
 struct CPU <: AbstractPU end
 
 function hopping_hamiltonian(c, J; labels=keys(J))
-    H = deepcopy(1.0 * first(c))
+    T = typeof(J[first(labels)])
+    H = deepcopy(one(T) * first(c))
     for (k1, k2) in labels
         H .+= J[(k1, k2)] * c[k1]'c[k2] + hc
     end
     return blockdiagonal(H, c)
 end
 function coulomb_hamiltonian(c, V; labels=keys(V))
-    H = deepcopy(1.0 * first(c))
+    T = typeof(V[first(labels)])
+    H = deepcopy(one(T) * first(c))
     for (k1, k2) in labels
         H .+= V[(k1, k2)] * c[k1]'c[k1] * c[k2]'c[k2]
+    end
+    return blockdiagonal(H, c)
+end
+function qd_level_hamiltonian(c, ε; labels=keys(ε))
+    T = typeof(ε[first(labels)])
+    H = deepcopy(one(T) * first(c))
+    for l in labels
+        H .+= ε[l] * c[l]'c[l]
     end
     return blockdiagonal(H, c)
 end
@@ -152,7 +162,7 @@ function QuantumReservoir(H0::h, H::h, leads0::L0, leads::L, c::B, Ilabels::IL, 
     particle_number = blockdiagonal(numberoperator(c), c)
     ls0 = LindbladSystem(H0, leads0)
     prob0 = StationaryStateProblem(ls0)
-    rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-12)
+    rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=1e-6)
     rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
     normalize_rho!(rho0)
     rhointernal0 = vecrep(rho0, ls0)
