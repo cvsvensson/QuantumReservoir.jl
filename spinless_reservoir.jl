@@ -70,9 +70,9 @@ test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
 tspan = (0, 40 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(tspan[end] / 100, tspan[end] / 2, 20)
 proc = CPU();
-@time timesols = time_evolve(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
 @time training_sols = time_evolve(reservoir, training_ensemble, t_obs; proc);
 @time test_sols = time_evolve(reservoir, test_ensemble, t_obs; proc);
+@time timesols = time_evolve(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
 ##
 p = plot();
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue], label="Lead" .* string.(eachindex(reservoir.leads))), timesols, [:solid, :dash, :dashdot]);

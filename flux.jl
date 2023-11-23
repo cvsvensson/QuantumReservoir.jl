@@ -4,16 +4,18 @@ function get_model(y, W)
     n = size(W, 2) - 1
     m = size(W, 1)
     return Chain(
-        Dense(W[:, 1:end-1], W[:, end]),
-        Dense(m => m, tanh; bias=true),
+        Dense(W[:, 1:end-1], W[:, end], tanh),
+        # Dense(m => m, tanh; bias=true),
         Dense(m => size(y, 1)))
 end
 function get_model2(y, W)
     n = size(W, 2) - 1
     m = size(W, 1)
+    m = 3
     return Chain(
-        Dense(n => m),
-        Dense(m => m, tanh; bias=true),
+        # Dense(n => m),
+        Dense(n => m, tanh; bias=true),
+        # Dense(n => size(y, 1), tanh; bias=true),)
         Dense(m => size(y, 1)))
 end
 
@@ -23,11 +25,11 @@ y2 = Float32.(y[1:2, :])
 model = get_model2(y2, Float32.(W1))
 loader = Flux.DataLoader((X2, y2), batchsize=100, shuffle=true);
 # optim = Flux.setup(Flux.Adam(0.001), model)
-optim = Flux.setup(OptimiserChain(WeightDecay(1.0f-12), Adam(0.001)), model)
+optim = Flux.setup(OptimiserChain(WeightDecay(1.0f-12), Adam(0.01)), model)
 ##
 # Training loop, using the whole data set 1000 times:
 losses = []
-@showprogress for epoch in 1:2_000_0
+@showprogress for epoch in 1:5_000
     for (x, y) in loader
         _loss, grads = Flux.withgradient(model) do m
             # Evaluate model and loss inside gradient context:
