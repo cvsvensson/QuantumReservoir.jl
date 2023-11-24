@@ -42,7 +42,10 @@ Hqd = qd_level_hamiltonian(c, ε)
 ##
 H0 = HR + HI + 5HV + 0Hqd
 H = H0 + HIR
-QuantumDots.diagonalize(H0).values |> sort
+QuantumDots.diagonalize(H).values |> sort
+QuantumDots.diagonalize(H- 5HV).values |> sort
+QuantumDots.diagonalize(H- 5.1HV).values |> sort |> diff |> minimum
+QuantumDots.diagonalize(H).values |> sort |> diff |> minimum
 ##
 μmin = -1e5
 μs = [10, 0]#[μmin, μmin]#rand(2)
@@ -89,7 +92,7 @@ W2 = y * X' * inv(X * X' + 1e-8 * I)
 W3 = y * pinv(X)
 ##
 titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 1:8, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
+let is = 1:10, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
     p = plot(; size=1.2 .* (600, 400))
     colors = cgrad(:seaborn_dark, size(y, 1))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
@@ -111,7 +114,7 @@ function loss_function(W, X, y)
         Wi, b = size(W, 2) > size(X, 1) ? (W[i, 1:end-1], W[i, end] * ones(M)) : (W[i, :], zeros(M))
         loss += sum(abs2, (Wi' * X)' .- y[i, :] .+ b)
     end
-    return sqrt(loss) / size(X, 2)
+    return sqrt(loss) #/ size(X, 2)
 end
 loss_function(W1, training_sols.data, training_ensemble.data)
 loss_function(W1, test_sols.data, test_ensemble.data)
@@ -134,31 +137,33 @@ function get_loss_function(c, J, V, ε, Γ, M, training_parameters, validation_p
         reservoir = QuantumReservoir(H0, H, leads0, leads, c, Ilabels, Rlabels)
         training_ensemble = InitialEnsemble(training_parameters[1:M], reservoir)
         test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
-        t_obs = range(tend / 100, tend, 10)
-        training_sols = time_evolve(reservoir, training_ensemble, t_obs; tol=1e-3)
-        test_sols = time_evolve(reservoir, test_ensemble, t_obs; tol=1e-3)
+        t_obs = range(tend / 50, tend, 20)
+        training_sols = time_evolve(reservoir, training_ensemble, t_obs)
+        test_sols = time_evolve(reservoir, test_ensemble, t_obs)
         X = training_sols.data
         y = training_ensemble.data
         ridge = RidgeRegression(1e-6; fit_intercept=true)
         W1 = reduce(hcat, map(data -> fit(ridge, X', data), eachrow(y))) |> permutedims
-        return loss_function(W1, test_sols.data, training_sols.data)
+        return loss_function(W1, test_sols.data, test_ensemble.data)
     end
 end
 ##
 fl = get_loss_function(c, J, V, ε, Γ, 100, training_parameters, validation_parameters)
-@time fl(1, 2, 1, 1, 10)
-plot([fl(v, 0.0, 100.0, 1.0, 10.0) for v in range(0, 10, 10)])
+@time fl(5, 0, 10, 1, 20)
+plot([fl(v, 0.0, 0.0, 1.0, 10.0) for v in range(0, 100, 10)])
 plot([fl(6.0, v, 100.0, 1.0, 10.0) for v in range(-1, 1, 10)])
-plot([fl(6.0, 0.0, v, 1.0, 10.0) for v in range(-1, 100, 10)])
+plot([fl(6.0, 0.0, v, 1.0, 10.0) for v in range(0, 10, 10)])
 plot([fl(6.0, 0.0, 100.0, 1.0, v) for v in range(0.5, 10, 10)])
 ##
 using Optimization, OptimizationBBO, OptimizationOptimJL
 # (v, ϵ, μs, γ, tend)
-prob = OptimizationProblem((u, p) -> fl(u...), [1.0, 1.0, 1.0, 1.0, 10.0]; lb=Float64[0, -10, -10, 0.5, 0.1], ub=Float64[10, 10, 100, 2, 20])
-sol = solve(prob, ParticleSwarm(); maxiters=100, maxtime=10, show_trace=true)
+prob = OptimizationProblem((u, p) -> fl(u...), [1.0, 1.0, 1.0, 1.0, 10.0]; lb=Float64[0, -10, -10, 0.5, 1], ub=Float64[10, 10, 100, 2, 40])
+sol = solve(prob, ParticleSwarm(); maxiters=1000, maxtime=20, show_trace=true)
 ##
 prob = OptimizationProblem((u, p) -> fl(u..., 1, 40), [1.0, 1.0, 1.0]; lb=Float64[0, -10, -10], ub=Float64[10, 10, 100])
-sol = solve(prob, ParticleSwarm(); maxiters=100, maxtime=10, show_trace=true)
+sol1 = solve(prob, ParticleSwarm(); maxiters=1000, maxtime=20, show_trace=true)
+# sol2 = solve(prob, BBO_probabilistic_descent(); maxiters=1000, maxtime=20, show_trace=true)
+# sol3 = solve(prob, BBO_adaptive_de_rand_1_bin_radiuslimited(); maxiters=1000, maxtime=20, show_trace=true)
 
 ##
 sol = solve(OptimizationProblem((x, p) -> norm(x .^ 2), [1.0, 2.0, 3.0]), ParticleSwarm(); maxiters=100, maxtime=1, show_trace=true)

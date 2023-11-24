@@ -108,6 +108,7 @@ end
 _time_evolve(rho, A::SciMLBase.MatrixOperator, t_obs; current_ops, occ_ops, kwargs...) = _time_evolve(rho, A.A, t_obs; current_ops, occ_ops, kwargs...)
 function _time_evolve(rho, A, t_obs; current_ops, occ_ops, kwargs...)
     rhos = eachcol(expv_timestep(collect(t_obs), A, rho; kwargs...))
+    # rhos = [expv(t, A, rho; kwargs...) for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
 using KrylovKit

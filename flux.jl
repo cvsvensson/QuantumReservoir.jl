@@ -23,7 +23,7 @@ end
 X2 = Float32.(X)
 y2 = Float32.(y[1:2, :])
 model = get_model2(y2, Float32.(W1))
-loader = Flux.DataLoader((X2, y2), batchsize=100, shuffle=true);
+loader = Flux.DataLoader((X2, y2), batchsize=20, shuffle=true);
 # optim = Flux.setup(Flux.Adam(0.001), model)
 optim = Flux.setup(OptimiserChain(WeightDecay(1.0f-12), Adam(0.01)), model)
 ##
