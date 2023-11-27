@@ -105,8 +105,8 @@ function get_obs_data(rhointernal, current_ops, occ_ops)
     # occ
 end
 
-_time_evolve(rho, A::SciMLBase.MatrixOperator, t_obs; current_ops, occ_ops, kwargs...) = _time_evolve(rho, A.A, t_obs; current_ops, occ_ops, kwargs...)
-function _time_evolve(rho, A, t_obs; current_ops, occ_ops, kwargs...)
+time_evolve_exp(rho, A::SciMLBase.MatrixOperator, t_obs; current_ops, occ_ops, kwargs...) = time_evolve_exp(rho, A.A, t_obs; current_ops, occ_ops, kwargs...)
+function time_evolve_exp(rho, A, t_obs; current_ops, occ_ops, kwargs...)
     rhos = eachcol(expv_timestep(collect(t_obs), A, rho; kwargs...))
     # rhos = [expv(t, A, rho; kwargs...) for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
@@ -116,15 +116,21 @@ function _time_evolve(rho, ls::LazyLindbladSystem, t_obs; current_ops, occ_ops, 
     rhos = [exponentiate(ls, t, rho; kwargs...)[1] for t in t_obs]
     reduce(vcat, [get_obs_data(rho, current_ops, occ_ops) for rho in rhos])
 end
-time_evolve(proc::CPU, args...; kwargs...) = time_evolve(args...; kwargs...)
-function time_evolve(rho, ls::LindbladSystem, args...; kwargs...)
+time_evolve_ode(proc::CPU, args...; kwargs...) = _time_evolve_ode(args...; kwargs...)
+time_evolve_exp(proc::CPU, args...; kwargs...) = time_evolve_exp(args...; kwargs...)
+time_evolve_nonlinear(proc::CPU, args...; kwargs...) = time_evolve_nonlinear(args...; kwargs...)
+function time_evolve_ode(rho::AbstractArray, ls::LindbladSystem, args...; kwargs...)
     A = QuantumDots.LinearOperator(ls)
-    _time_evolve(vecrep(rho, ls), A, args...; kwargs...)
+    time_evolve_ode(vecrep(rho, ls), A, args...; kwargs...)
 end
-function time_evolve(rho, ls::LazyLindbladSystem, args...; kwargs...)
-    _time_evolve(rho, ls, args...; kwargs...)
+function time_evolve_exp(rho::AbstractArray, ls::LindbladSystem, args...; kwargs...)
+    A = QuantumDots.LinearOperator(ls)
+    time_evolve_exp(vecrep(rho, ls), A, args...; kwargs...)
 end
-function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, alg=ROCK4(), kwargs...)
+# function time_evolve(rho, ls::LazyLindbladSystem, args...; kwargs...)
+#     _time_evolve(rho, ls, args...; kwargs...)
+# end
+function _time_evolve_ode(rho::AbstractArray, A, tspan, t_obs; current_ops, occ_ops, alg=ROCK4(), kwargs...)
     # drho!(out, rho, p, t) = mul!(out, A, rho)
     prob = ODEProblem(A, rho, tspan)
     sol = solve(prob, alg; abstol=1e-3, kwargs...)
@@ -135,11 +141,26 @@ function _time_evolve(rho, A, tspan::Tuple, t_obs; current_ops, occ_ops, alg=ROC
     return (; ts, sol, currents, observations)
 end
 
+function time_evolve_nonlinear(rho, ls::LindbladSystem, t::Number, op; kwargs...)
+    A = ls.unitary
+    rho_measured = op * tomatrix(expv(t, A, vecrep(rho, ls); kwargs...), ls) * op'
+    vecrep(normalize_rho!(rho_measured), ls)
+end
+function time_evolve_nonlinear(rho, ls, ts, op; kwargs...)
+    t0 = first(ts)
+    dt = diff(ts)
+    newts = [t0, dt...]
+    for t in newts
+        rho = time_evolve_nonlinear(rho, ls, t, op; kwargs...)
+    end
+    return rho
+end
+
 QuantumDots.internal_rep(rho, ls::LazyLindbladSystem) = reshape(rho, size(ls.hamiltonian))
 # LinearOperatorRep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
 # LinearOperatorRep(rho, ::LazyLindbladSystem) = vec(rho)
 
-vecrep(rho, ls::LazyLindbladSystem) = vec(rho)
+vecrep(rho, ::LazyLindbladSystem) = vec(rho)
 vecrep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
 
 
@@ -186,14 +207,16 @@ function InitialEnsemble(parameters, res::QuantumReservoir)
     InitialEnsemble{typeof(rho0s),typeof(data)}(rho0s, data)
 end
 
-function time_evolve(res, rho0, tspan, t_obs, proc=CPU(), kwargs...)
-    time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...)
+function time_evolve_ode(res::QuantumReservoir, rho0::AbstractArray, tspan, t_obs; proc=CPU(), kwargs...)
+    time_evolve_ode(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...)
 end
-function time_evolve(res, ens::InitialEnsemble, tspan, t_obs; proc=CPU(), kwargs...)
-    map(rho0 -> time_evolve(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...), ens.rho0s)
+function time_evolve_ode(res::QuantumReservoir, ens::InitialEnsemble, tspan, t_obs, t_nl=Float64[]; proc=CPU(), op=nothing, kwargs...)
+    rhos = length(t_nl) > 0 ? map(rho0 -> time_evolve_nonlinear(proc, rho0, res.ls, t_nl, op), ens.rho0s) : ens.rho0s
+    map(rho0 -> time_evolve_ode(proc, rho0, res.ls, tspan, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...), rhos)
 end
-function time_evolve(res, ens::InitialEnsemble, t_obs; proc=CPU(), kwargs...)
-    sols = map(rho0 -> time_evolve(proc, rho0, res.ls, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...), ens.rho0s)
+function time_evolve_exp(res::QuantumReservoir, ens::InitialEnsemble, t_obs, t_nl=Float64[]; proc=CPU(), op=nothing, kwargs...)
+    rhos = length(t_nl) > 0 ? map(rho0 -> time_evolve_nonlinear(proc, rho0, res.ls, t_nl, op; kwargs...), ens.rho0s) : ens.rho0s
+    sols = map(rho0 -> time_evolve_exp(proc, rho0, res.ls, t_obs; current_ops=res.current_ops, occ_ops=res.R_occ_ops, kwargs...), rhos)
     data = reduce(hcat, sols)
     return (; sols, data)
 end

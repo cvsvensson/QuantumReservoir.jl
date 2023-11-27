@@ -4,7 +4,7 @@ using Plots
 using LinearSolve
 using ExponentialUtilities
 using MLJLinearModels
-# using OrdinaryDiffEq
+using OrdinaryDiffEq
 using Statistics
 using Folds
 using Random
@@ -43,8 +43,8 @@ Hqd = qd_level_hamiltonian(c, ε)
 H0 = HR + HI + 5HV + 0Hqd
 H = H0 + HIR
 QuantumDots.diagonalize(H).values |> sort
-QuantumDots.diagonalize(H- 5HV).values |> sort
-QuantumDots.diagonalize(H- 5.1HV).values |> sort |> diff |> minimum
+QuantumDots.diagonalize(H - 5HV).values |> sort
+QuantumDots.diagonalize(H - 5.1HV).values |> sort |> diff |> minimum
 QuantumDots.diagonalize(H).values |> sort |> diff |> minimum
 ##
 μmin = -1e5
@@ -65,7 +65,7 @@ rhoI0 = pretty_print(partial_trace(reservoir.rho0, Ilabels, c), cI)
 rhoR0 = pretty_print(partial_trace(reservoir.rho0, Rlabels, c), cR)
 
 ##
-M = 100
+M = 400
 training_ensemble = InitialEnsemble(training_parameters[1:M], reservoir)
 test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
 
@@ -73,9 +73,13 @@ test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
 tspan = (0, 40 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(tspan[end] / 100, tspan[end] / 2, 20)
 proc = CPU();
-@time training_sols = time_evolve(reservoir, training_ensemble, t_obs; proc);
-@time test_sols = time_evolve(reservoir, test_ensemble, t_obs; proc);
-@time timesols = time_evolve(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
+@time training_sols = time_evolve_exp(reservoir, training_ensemble, t_obs; proc);
+@time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, 1; op=c[N, 1]' * c[N, 1], proc);
+@time test_sols = time_evolve_exp(reservoir, test_ensemble, t_obs; proc);
+@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
+@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs, 100; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
+superpos_ensemble = InitialEnsemble([training_ensemble.rho0s[1], training_ensemble.rho0s[2], (training_ensemble.rho0s[1] + training_ensemble.rho0s[2]) / 2], nothing)
+@time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
 ##
 p = plot();
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue], label="Lead" .* string.(eachindex(reservoir.leads))), timesols, [:solid, :dash, :dashdot]);
@@ -193,3 +197,13 @@ internal_N = QuantumDots.internal_rep(particle_number, ls)
 current_ops = map(diss -> diss' * internal_N, ls.dissipators)
 R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
 I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
+
+## Entanglement non-linearity
+perm = sortperm(training_ensemble.data[1, :])
+entropies = training_ensemble.data[1, perm];
+rhos = training_ensemble.rho0s[perm];
+ent1 = [input_entanglement((r1 + r2) / 2) for (n1, r1) in enumerate(rhos), (n2, r2) in enumerate(rhos)]
+ent2 = [(entropies[n1] + entropies[n2]) / 2 for (n1, r1) in enumerate(rhos), (n2, r2) in enumerate(rhos)]
+
+heatmap(ent1)
+heatmap(ent2)
