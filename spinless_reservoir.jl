@@ -72,14 +72,15 @@ test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
 ##
 tspan = (0, 40 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(tspan[end] / 100, tspan[end] / 2, 20)
+t_nl = [1]
 proc = CPU();
 @time training_sols = time_evolve_exp(reservoir, training_ensemble, t_obs; proc);
-@time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, 1; op=c[N, 1]' * c[N, 1], proc);
+@time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, t_nl; op=c[N, 1]' * c[N, 1], proc);
 @time test_sols = time_evolve_exp(reservoir, test_ensemble, t_obs; proc);
 @time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
 @time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs, 100; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
 superpos_ensemble = InitialEnsemble([training_ensemble.rho0s[1], training_ensemble.rho0s[2], (training_ensemble.rho0s[1] + training_ensemble.rho0s[2]) / 2], nothing)
-@time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
+@time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs, t_nl; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
 ##
 p = plot();
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue], label="Lead" .* string.(eachindex(reservoir.leads))), timesols, [:solid, :dash, :dashdot]);
@@ -87,7 +88,7 @@ vline!(t_obs, label="observations");
 p
 
 ## Training
-X = training_sols.data
+X = training_sols2.data
 # X .+= 0randn(size(X)) * 1e-3 * mean(abs, X)
 y = training_ensemble.data
 ridge = RidgeRegression(1e-6; fit_intercept=true)
