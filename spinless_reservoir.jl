@@ -40,7 +40,7 @@ HIR = hopping_hamiltonian(c, J; labels=IRconnections)
 HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
 Hqd = qd_level_hamiltonian(c, ε)
 ##
-H0 = HR + HI + 5HV + 0Hqd
+H0 = HR + HI + 5HV + Hqd
 H = H0 + HIR
 QuantumDots.diagonalize(H).values |> sort
 QuantumDots.diagonalize(H - 5HV).values |> sort
@@ -65,7 +65,7 @@ rhoI0 = pretty_print(partial_trace(reservoir.rho0, Ilabels, c), cI)
 rhoR0 = pretty_print(partial_trace(reservoir.rho0, Rlabels, c), cR)
 
 ##
-M = 400
+M = 100
 training_ensemble = InitialEnsemble(training_parameters[1:M], reservoir)
 test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
 
@@ -75,12 +75,12 @@ t_obs = range(tspan[end] / 100, tspan[end] / 2, 20)
 t_nl = [1]
 proc = CPU();
 @time training_sols = time_evolve_exp(reservoir, training_ensemble, t_obs; proc);
-@time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, t_nl; op=c[N, 1]' * c[N, 1], proc);
+# @time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, t_nl; op=c[N, 1]' * c[N, 1], proc);
 @time test_sols = time_evolve_exp(reservoir, test_ensemble, t_obs; proc);
 @time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
-@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs, 100; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
-superpos_ensemble = InitialEnsemble([training_ensemble.rho0s[1], training_ensemble.rho0s[2], (training_ensemble.rho0s[1] + training_ensemble.rho0s[2]) / 2], nothing)
-@time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs, t_nl; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
+# @time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs, 100; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
+# superpos_ensemble = InitialEnsemble([training_ensemble.rho0s[1], training_ensemble.rho0s[2], (training_ensemble.rho0s[1] + training_ensemble.rho0s[2]) / 2], nothing)
+# @time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs, t_nl; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
 ##
 p = plot();
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue], label="Lead" .* string.(eachindex(reservoir.leads))), timesols, [:solid, :dash, :dashdot]);
@@ -88,26 +88,43 @@ vline!(t_obs, label="observations");
 p
 
 ## Training
-X = training_sols2.data
+X = training_sols.data
 # X .+= 0randn(size(X)) * 1e-3 * mean(abs, X)
 y = training_ensemble.data
-ridge = RidgeRegression(1e-6; fit_intercept=true)
+ridge = RidgeRegression(1e-3; fit_intercept=true)
 W1 = reduce(hcat, map(data -> fit(ridge, X', data), eachrow(y))) |> permutedims
 W2 = y * X' * inv(X * X' + 1e-8 * I)
 W3 = y * pinv(X)
 ##
-titles = ["entropy of one input dot", "purity of inputs", "ρ11", "ρ22", "ρ33", "ρ44", "real(ρ23)", "imag(ρ23)", "n1", "n2"]
-let is = 1:10, perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
-    p = plot(; size=1.2 .* (600, 400))
+using LaTeXStrings
+titles = ["entropy of one input dot", "purity", "ρ₁₁", "ρ₂₂", "ρ₃₃", "ρ₄₄", "real(ρ₂₃)", "imag(ρ₂₃)", "n1", "n2"]
+let is = [2, 3, 4, 5], perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
+    p = plot(; size=0.6 .* (800, 600))
     colors = cgrad(:seaborn_dark, size(y, 1))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
     colors2 = cgrad(:seaborn_bright, size(y, 1))
+    M = size(y, 2)
     for i in is
         perm = sortperm(y[i, :])
         Wi, b = size(W, 2) > size(X, 1) ? (W[i, 1:end-1], W[i, end] * ones(M)) : (W[i, :], zeros(M))
-        plot!(p, (Wi' * X[:, perm])' .+ b; label=titles[i] * " pred", lw=3, c=colors[i], frame=:box)
-        plot!(y[i, perm]; label=titles[i] * " truth", lw=3, ls=:dash, c=colors2[i])
+        # plot!(p,y[i, perm]; label=latexstring(titles[i], " predicted"), lw=3, ls=:dash, c=colors2[i])
+        plot!(p, (Wi' * X[:, perm])' .+ b; lw=3, c=colors[i], frame=:box, xlabel="State number", label=nothing, xlims=(1, M))
+        ns = 1:5:M
+        scatter!(p, ns, y[i, perm][ns]; lw=2, ls=:dash, c=colors2[i], label=nothing)
+        scatter!(p, 10(reverse(ns) .+ ns), y[i, perm][ns]; lw=2, ls=:dash, c=colors2[i], label=titles[i], marker=:square)
+        # plot!(p, (Wi' * X[:, perm])' .+ b; label=titles[i] * " true value", lw=3, c=colors[i], frame=:box, xlabel="State number")
+        # ns = 1:5:size(y, 2)
+        # scatter!(p, ns, y[i, perm][ns]; label=titles[i] * " predicted", lw=2, ls=:dash, c=colors2[i])
+        # label=titles[i] * " true value"
+        # label=titles[i] * " predicted"
+        # plot(rand(10), color=colors2[i], label="random")
+        # plot!(rand(10), color=colors2[i], label="optimized")
+        # plot!(rand(10), color=colors2[i], linestyle=:dot, label="")
+        # plot!(rand(10), color=colors2[i], linestyle=:dot, label="")
     end
+    # annotate!(-10, 1, text("b)",  30))
+    plot!(p, [1], [0], label="truth", lw=2, color="black")
+    scatter!(p, [1], [0], linestyle=:dash, lw=2, label="prediction", color="black")
     display(p)
 end
 
