@@ -99,7 +99,7 @@ W3 = y * pinv(X)
 using LaTeXStrings
 titles = ["entropy of one input dot", "purity", "ρ₁₁", "ρ₂₂", "ρ₃₃", "ρ₄₄", "real(ρ₂₃)", "imag(ρ₂₃)", "n1", "n2"]
 let is = [2, 3, 4, 5], perm, W = W1, X = test_sols.data, y = test_ensemble.data, b
-    p = plot(; size=0.6 .* (800, 600))
+    p = plot(; size=0.4 .* (800, 600))
     colors = cgrad(:seaborn_dark, size(y, 1))
     # colors2 = cgrad(:seaborn_dark, size(y, 2))
     colors2 = cgrad(:seaborn_bright, size(y, 1))
@@ -108,9 +108,9 @@ let is = [2, 3, 4, 5], perm, W = W1, X = test_sols.data, y = test_ensemble.data,
         perm = sortperm(y[i, :])
         Wi, b = size(W, 2) > size(X, 1) ? (W[i, 1:end-1], W[i, end] * ones(M)) : (W[i, :], zeros(M))
         # plot!(p,y[i, perm]; label=latexstring(titles[i], " predicted"), lw=3, ls=:dash, c=colors2[i])
-        plot!(p, (Wi' * X[:, perm])' .+ b; lw=3, c=colors[i], frame=:box, xlabel="State number", label=nothing, xlims=(1, M))
+        plot!(p, (Wi' * X[:, perm])' .+ b; lw=3, c=colors[i], frame=:box, xlabel="State number", label=nothing, xlims=(1, M), z_order=:back, grid=false, yticks = [0,.5, 1])
         ns = 1:5:M
-        scatter!(p, ns, y[i, perm][ns]; lw=2, ls=:dash, c=colors2[i], label=nothing)
+        scatter!(p, ns, y[i, perm][ns]; lw=2, ls=:dash, c=colors2[i], label=nothing, markerstrokewidth=3)
         scatter!(p, 10(reverse(ns) .+ ns), y[i, perm][ns]; lw=2, ls=:dash, c=colors2[i], label=titles[i], marker=:square)
         # plot!(p, (Wi' * X[:, perm])' .+ b; label=titles[i] * " true value", lw=3, c=colors[i], frame=:box, xlabel="State number")
         # ns = 1:5:size(y, 2)
@@ -125,6 +125,7 @@ let is = [2, 3, 4, 5], perm, W = W1, X = test_sols.data, y = test_ensemble.data,
     # annotate!(-10, 1, text("b)",  30))
     plot!(p, [1], [0], label="truth", lw=2, color="black")
     scatter!(p, [1], [0], linestyle=:dash, lw=2, label="prediction", color="black")
+    # yticks!(p,nothing)
     display(p)
 end
 
