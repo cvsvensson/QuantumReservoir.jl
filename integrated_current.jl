@@ -122,19 +122,42 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROC
         prob.u0 .= vecrep(ens.rho0s[i], ls)
         prob
     end
-    reduce(hcat, map(rho0 -> integrated_current_exp(tmax, ls, rho0, current_ops), ens.rho0s))
+    function solve_int(vrho0)
+        bif = BatchIntegralFunction((ts, p) -> current_integrand(ts, ls, vrho0, current_ops; kwargs...))
+        prob = IntegralProblem(bif, tspan)
+        solve(prob, int_alg; kwargs...)
+    end
+    reduce(hcat, map(rho0 -> solve_int(vecrep(rho0, ls)), ens.rho0s))
+    # reduce(hcat, map(rho0 -> integrated_current_exp(tmax, ls, rho0, current_ops), ens.rho0s))
     # eprob = EnsembleProblem(prob;
     #     output_func=(sol, i) -> (integrated_current(sol, tmax, current_ops; int_alg, kwargs...), false),
     #     prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
     #     reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
     # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...)
 end
+
 function integrated_current_exp(tmax, ls, rho0, current_ops; kwargs...)
     # This is the wrong calculation. Should try Di*Int(U(t)dt)*rho0 as an Integralproblem with expv in integrand
     A = QuantumDots.LinearOperator(ls)
     vrho = vecrep(rho0, ls)
     rhof = expv(tmax, A, vrho; kwargs...)
     [real(tr((rhof)' * op)) for op in current_ops]
+end
+function current_integrand(ts, ls, vrho0, current_ops; kwargs...)
+    # Di*U(t)*rho0 
+    # Seems pretty slow?
+    # Should try with a evaluating rho on a grid from FastGaussQuadrature and integrating on the same
+    if length(ts) == 0
+        return zeros(length(current_ops), 1)
+    end
+    A = QuantumDots.LinearOperator(ls)
+    rhos = expv_timestep(ts, A, vrho0)
+    # display(current_ops[1])
+    # display(eachcol(rhos)[1]'*current_ops[1])
+    res = [real(tr((rho)' * op)) for op in current_ops, rho in eachcol(rhos)]
+    # display(ts)
+    # display(res)
+    res
 end
 function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROCK4(), ensemblealg=EnsembleThreads(), kwargs...)
     tspan = (0, tmax)
@@ -212,10 +235,10 @@ M_val = 200
 tmax = 100
 abstol = 1e-6
 reltol = 1e-5
-# int_alg = QuadGKJL(; order=2)
-# int_alg = CubatureJLh()
-# int_alg = CubatureJLp()
-# int_alg = HCubatureJL()
+int_alg = QuadGKJL(; order=2)
+int_alg = CubatureJLh()
+int_alg = CubatureJLp()
+int_alg = HCubatureJL()
 int_alg = GaussLegendre()
 @time training_sols2 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, int_alg);
 #@time run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, ensemblealg=EnsembleSerial());
