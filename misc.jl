@@ -45,7 +45,7 @@ function random_nearest_hoppings(labels, s=1)
     Dict(couplings)
 end
 
-function modify_initial_state((rs, θ, ϕ), rho, c=c; kwargs...)
+function modify_initial_state((rs, θ, ϕ), rho, c; kwargs...)
     si, co = sincos(θ)
     # channels = (I, c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]', c[0, 1]' * c[0, 2]')
     channels = (c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]',)
@@ -62,17 +62,28 @@ function generate_training_parameters(M)
     r = 10 * rand(M, 3)
     return collect(zip(eachrow(r), θ, ϕ))
 end
-function generate_initial_states(ps, rho)
+function generate_initial_states(ps, rho, c)
     # itr = Iterators.take(zip(eachrow(r), θ, ϕ), M)
-    [modify_initial_state(p, rho) for p in ps]
+    [modify_initial_state(p, rho, c) for p in ps]
 end
-function training_data(rhos, c; occ_ops, Ilabels)
-    y = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ilabels), rhos))
+function training_data(rhos, c, occ_ops, Ilabels)
+    y = reduce(hcat, map(rho -> get_target_data(rho, occ_ops, c, Ihalflabels, Ilabels), rhos))
     return y
 end
-function get_target_data(rho, I_n_ops, c, Ilabels)
+function training_data(rhos, c, Ihalflabels, Ilabels)
+    y = reduce(hcat, map(rho -> get_target_data(rho, c, Ihalflabels, Ilabels), rhos))
+    return y
+end
+function get_target_data(rho, c, Ihalflabels, Ilabels)
+    entropy = input_entanglement(rho, Ihalflabels, c)
+    rhoI = partial_trace(rho, Ilabels, c)
+    purity = real(tr(rhoI^2))
+    rv = get_rho_vec(rhoI)
+    return [entropy, purity, rv...]
+end
+function get_target_data(rho, I_n_ops, c, Ihalflabels, Ilabels)
     occupations = [real(tr(rho * op)) for op in I_n_ops]
-    entropy = input_entanglement(rho)
+    entropy = input_entanglement(rho, Ihalflabels, c)
     rhoI = partial_trace(rho, Ilabels, c)
     purity = real(tr(rhoI^2))
     rv = get_rho_vec(rhoI)
@@ -92,17 +103,28 @@ function get_rho_vec(rho)
     end
 end
 
-function input_entanglement(rho, c=c)
+function get_rho_mat(rho)
+    if length(rho) == 6
+        rho1 = [rho[1];;]
+        rho2 = Diagonal(rho[2:3]) + [0 1; 1 0] * rho[5] + [0 1im; -1im 0] * rho[6]
+        rho3 = [rho[4];;]
+        return BlockDiagonal([rho1, rho2, rho3])
+    else
+        throw(ArgumentError("Don't know what to do with vectors of length(rho) == $(length(rho))"))
+    end
+end
+
+
+function input_entanglement(rho, Ihalflabels, c)
     rhosub = partial_trace(rho, Ihalflabels, c)
     real(-tr(rhosub * log(rhosub)))
 end
 
+get_obs_data(rhointernal, current_ops) = [real(tr(rhointernal' * op)) for op in current_ops]
 function get_obs_data(rhointernal, current_ops, occ_ops)
     cur = [real(tr(rhointernal' * op)) for op in current_ops]
-    # occ = [real(tr(rhointernal' * op)) for op in occ_ops]
-    # vcat(cur, occ)
-    cur
-    # occ
+    occ = [real(tr(rhointernal' * op)) for op in occ_ops]
+    vcat(cur, occ)
 end
 
 time_evolve_exp(rho, A::SciMLBase.MatrixOperator, t_obs; current_ops, occ_ops, kwargs...) = time_evolve_exp(rho, A.A, t_obs; current_ops, occ_ops, kwargs...)
