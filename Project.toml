@@ -1,6 +1,5 @@
 [deps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
-Cubature = "667455a9-e2ce-5579-9412-b964f529a492"
 DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
 ExponentialAction = "e24c0720-ea99-47e8-929e-571b494574d3"
 ExponentialUtilities = "d4d017d3-3776-5f7e-afef-a10c40355c18"

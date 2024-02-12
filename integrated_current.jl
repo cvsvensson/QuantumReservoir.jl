@@ -88,7 +88,7 @@ function initialize_reservoir(rc, (J, V, Γ), (sJ, sV, sΓ), (T, μ), μmin)
     _get_leads() = (leads0, leads)
     return IntegratedQuantumReservoir(c, rc, get_hamiltonian, _get_leads)
 end
-function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parameters, tmax; time_trace=false, ss_abstol=1e-6, int_alg=GaussLegendre(), kwargs...)
+function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parameters, tmax; alg=ROCK4(), time_trace=false, ss_abstol=1e-6, int_alg=GaussLegendre(), kwargs...)
     H0, H = res.Hfunc(ε)
     leads0, leads = res.leadsfunc()
     c = res.c
@@ -108,12 +108,25 @@ function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parame
     rho0s = generate_initial_states(initial_state_parameters, rho0, c)
     data = training_data(rho0s, res.c, res.rc.Ihalflabels, res.rc.Ilabels)
     ens = InitialEnsemble{typeof(rho0s),typeof(data)}(rho0s, data)
-    results = integrated_current(ls, ens, tmax, current_ops; int_alg, kwargs...)
-    current = time_trace ? get_current_time_trace(ls, ens, tmax, current_ops; kwargs...) : missing
+    results = integrated_current(ls, ens, tmax, current_ops, alg; int_alg, kwargs...)
+    current = time_trace ? get_current_time_trace(ls, ens, tmax, current_ops; alg, kwargs...) : missing
     return (; integrated=results, ensemble=ens, current)
 end
 
-function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROCK4(), int_alg, ensemblealg=EnsembleThreads(), kwargs...)
+struct Sampled{G}
+    grid::G
+end
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, solver::Sampled; int_alg, kwargs...)
+    grid = solver.grid
+    @assert tmax ≈ grid[end]
+    function solve_int(vrho0)
+        vals = current_integrand(grid, ls, vrho0, current_ops; kwargs...)
+        prob = SampledIntegralProblem(vals, grid; kwargs...)
+        solve(prob, int_alg)
+    end
+    reduce(hcat, map(rho0 -> solve_int(vecrep(rho0, ls)), ens.rho0s))
+end
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg=Rock4(); int_alg, ensemblealg=EnsembleThreads(), kwargs...)
     tspan = (0, tmax)
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
@@ -122,44 +135,19 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROC
         prob.u0 .= vecrep(ens.rho0s[i], ls)
         prob
     end
-    function solve_int(vrho0)
-        bif = BatchIntegralFunction((ts, p) -> current_integrand(ts, ls, vrho0, current_ops; kwargs...))
-        prob = IntegralProblem(bif, tspan)
-        solve(prob, int_alg; kwargs...)
-    end
-    reduce(hcat, map(rho0 -> solve_int(vecrep(rho0, ls)), ens.rho0s))
-    # reduce(hcat, map(rho0 -> integrated_current_exp(tmax, ls, rho0, current_ops), ens.rho0s))
-    # eprob = EnsembleProblem(prob;
-    #     output_func=(sol, i) -> (integrated_current(sol, tmax, current_ops; int_alg, kwargs...), false),
-    #     prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
-    #     reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
-    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...)
+    eprob = EnsembleProblem(prob;
+        output_func=(sol, i) -> (integrated_current(sol, tmax, current_ops; int_alg, kwargs...), false),
+        prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
+        reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
 end
 
-function integrated_current_exp(tmax, ls, rho0, current_ops; kwargs...)
-    # This is the wrong calculation. Should try Di*Int(U(t)dt)*rho0 as an Integralproblem with expv in integrand
+function current_integrand(ts, ls, vrho0, current_ops; abstol, kwargs...)
     A = QuantumDots.LinearOperator(ls)
-    vrho = vecrep(rho0, ls)
-    rhof = expv(tmax, A, vrho; kwargs...)
-    [real(tr((rhof)' * op)) for op in current_ops]
+    rhos = expv_timestep(ts, A, vrho0; tol=abstol, adaptive=true)
+    [real(tr((rho)' * op)) for op in current_ops, rho in eachcol(rhos)]
 end
-function current_integrand(ts, ls, vrho0, current_ops; kwargs...)
-    # Di*U(t)*rho0 
-    # Seems pretty slow?
-    # Should try with a evaluating rho on a grid from FastGaussQuadrature and integrating on the same
-    if length(ts) == 0
-        return zeros(length(current_ops), 1)
-    end
-    A = QuantumDots.LinearOperator(ls)
-    rhos = expv_timestep(ts, A, vrho0)
-    # display(current_ops[1])
-    # display(eachcol(rhos)[1]'*current_ops[1])
-    res = [real(tr((rho)' * op)) for op in current_ops, rho in eachcol(rhos)]
-    # display(ts)
-    # display(res)
-    res
-end
-function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROCK4(), ensemblealg=EnsembleThreads(), kwargs...)
+function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROCK4(), ensemblealg=EnsembleThreads(), abstol, kwargs...)
     tspan = (0, tmax)
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
@@ -173,7 +161,7 @@ function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg
         output_func=(sol, i) -> ([real(tr(sol(t)' * op)) for t in ts, op in current_ops], false),
         prob_func,
         reduction=(u, data, I) -> (append!(u, data), false))
-    solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...)
+    solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), abstol, kwargs...)
 end
 
 function run_reservoir_ensemble(res::IntegratedQuantumReservoir, εs, initial_state_parameters, tmax; kwargs...)
@@ -184,15 +172,6 @@ function run_reservoir_ensemble(res::IntegratedQuantumReservoir, εs, initial_st
     return (; integrated, ensemble, time_traces)
 end
 function integrated_current(sol, tmax, current_ops; int_alg, kwargs...)
-    count = 0
-    # function f(cur, t, p)
-    #     for (n, op) in enumerate(current_ops)
-    #         cur[n] = real(tr(sol(t)' * op))
-    #     end
-    #     # print("|", count += 1)
-    #     return cur
-    # end
-    # IntegralFunction(f, zeros(Float64, length(current_ops)))
     function f(t, p)
         [real(tr(sol(t)' * op)) for op in current_ops]
     end
@@ -231,16 +210,22 @@ qd_level_measurements = [Dict(l => 5 * (rand() - 0.5) for l in rc.labels) for i 
 ##
 reservoir = initialize_reservoir(rc, reservoir_parameters[1], (1, 0, 1), (T, μs), μmin)
 M_train = 20
-M_val = 200
+M_val = 100
 tmax = 100
 abstol = 1e-6
 reltol = 1e-5
+grid = let n = 4
+    (range(0, tmax^(1 // n), 100)) .^ n
+end
 int_alg = QuadGKJL(; order=2)
-int_alg = CubatureJLh()
-int_alg = CubatureJLp()
 int_alg = HCubatureJL()
 int_alg = GaussLegendre()
-@time training_sols2 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, int_alg);
+alg = DP8()
+@time training_sols_exp = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg);
+
+@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg, time_trace=false);
+
+@profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg);
 #@time run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, ensemblealg=EnsembleSerial());
 @profview run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, int_alg, ensemblealg=EnsembleSerial());
 @time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, reltol, int_alg);
@@ -259,18 +244,26 @@ for params in reservoir_parameters
     push!(data, loss_function_density_matrix(W, test_sols))
 end
 plot(map(x -> x.mean, data), yerr=map(x -> x.std, data), ylims=(0, 0.5))
-
+##
+(ms -> (mean(ms), std(ms)))(map(x -> x.mean, data))
 ##
 data = []
-for sV in range(0, 1, 5)
-    reservoir = initialize_reservoir(rc, reservoir_parameters[1], (1, sV, 1), (T, μs), μmin)
-    @time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol)
-    @time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol)
-    W = fit_output_layer(training_sols)
-    push!(data, loss_function_density_matrix(W, test_sols))
+for V in range(0, 5, 5)
+    localdata = []
+    for params in reservoir_parameters
+        reservoir = initialize_reservoir(rc, params, (1, sV, 1), (T, μs), μmin)
+        @time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol)
+        @time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol)
+        W = fit_output_layer(training_sols)
+        push!(localdata, loss_function_density_matrix(W, test_sols).mean)
+    end
+    push!(data, [mean(localdata), std(localdata)])
 end
 ##
-plot(range(0, 1, 5), map(x -> x.mean, data), yerr=map(x -> x.std, data), ylims=(0, 0.5))
+plot(first.(data), yerr=last.(data), ylims=(0, 0.5))
+
+##
+#plot(range(0, 1, 5), map(x -> x.mean, data), yerr=map(x -> x.std, data), ylims=(0, 0.5))
 
 ## Training
 # X .+= 0randn(size(X)) * 1e-3 * mean(abs, X)
