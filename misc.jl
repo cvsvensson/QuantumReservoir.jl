@@ -2,24 +2,27 @@ abstract type AbstractPU end
 struct CPU <: AbstractPU end
 
 function hopping_hamiltonian(c, J; labels=keys(J))
-    T = typeof(J[first(labels)])
-    H = deepcopy(one(T) * first(c))
+    T = valtype(J)
+    H = deepcopy(zero(T) * first(c))
+    length(J) == 0 && return H
     for (k1, k2) in labels
         H .+= J[(k1, k2)] * c[k1]'c[k2] + hc
     end
     return blockdiagonal(H, c)
 end
 function coulomb_hamiltonian(c, V; labels=keys(V))
-    T = typeof(V[first(labels)])
-    H = deepcopy(one(T) * first(c))
+    T = valtype(V)
+    H = deepcopy(zero(T) * first(c))
+    length(V) == 0 && return H
     for (k1, k2) in labels
         H .+= V[(k1, k2)] * c[k1]'c[k1] * c[k2]'c[k2]
     end
     return blockdiagonal(H, c)
 end
 function qd_level_hamiltonian(c, ε; labels=keys(ε))
-    T = typeof(ε[first(labels)])
-    H = deepcopy(one(T) * first(c))
+    T = valtype(ε)
+    H = deepcopy(zero(T) * first(c))
+    length(ε) == 0 && return H
     for l in labels
         H .+= ε[l] * c[l]'c[l]
     end

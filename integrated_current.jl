@@ -116,6 +116,7 @@ end
 struct Sampled{G}
     grid::G
 end
+struct Exponentiation end
 function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, solver::Sampled; int_alg, kwargs...)
     grid = solver.grid
     @assert tmax ≈ grid[end]
@@ -126,7 +127,116 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, solver:
     end
     reduce(hcat, map(rho0 -> solve_int(vecrep(rho0, ls)), ens.rho0s))
 end
-function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg=Rock4(); int_alg, ensemblealg=EnsembleThreads(), kwargs...)
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Exponentiation; kwargs...)
+    # An = Matrix(QuantumDots.LinearOperator(ls; normalizer=true))
+    # ls2 = deepcopy(ls)
+    # ls2.total .= ls2.total'
+    # rho_stat1 = solve(StationaryStateProblem(ls)).u
+    # rho_stat2 = solve(StationaryStateProblem(ls2)).u
+    # println("rho_stat12: ", dot(rho_stat1, rho_stat2))
+    # println("rho_stat11: ", dot(rho_stat1, rho_stat1))
+    # println("rho_stat22: ", dot(rho_stat2, rho_stat2))
+    # Anrho = [An; rho_stat2']
+
+    A = Matrix(QuantumDots.LinearOperator(ls; normalizer=false))
+    # rhov0 = complex(vecrep(first(ens.rho0s), ls))
+    # ## prepare exponentiation
+    # out = deepcopy(rhov0)
+    # ## prepare linsolve
+    # prob = LinearProblem(A, rhov0)
+    # linsolve = init(prob)
+
+    Abar = [A I; 0I 0I]
+    n = size(A, 1)
+
+    # expabar = exponential!(Abar * tmax)
+    # Ut = expabar[1:n, n+1:end]
+    # out = deepcopy(vecrep(first(ens.rho0s), ls))
+    function fAbar!(w, v, p, t)
+        X = @view(v[1:n])
+        U = @view(v[n+1:end])
+        mul!(@view(w[1:n]), A, X)
+        w[1:n] .+= U
+        w[n+1:end] .= 0.0
+        w
+    end
+    cache_ap = ArrayPartition(zeros(ComplexF64, n), zeros(ComplexF64, n))
+    function Abar!(v)
+        X = v.x[1]
+        U = v.x[2]
+        mul!(cache_ap.x[1], A, X)
+        cache_ap.x[1] .+= U
+        cache_ap.x[2] .= 0.0
+        return cache_ap
+    end
+    function fAbar(v)
+        X = @view(v[1:n])
+        U = @view(v[n+1:end])
+        w = A * X
+        w .+= U
+        # w[n+1:end] .= 0.0
+        append!(w, z0)
+    end
+
+    b = zeros(ComplexF64, 2n)
+    w = zeros(ComplexF64, 2n)
+    fo = FunctionOperator(fAbar!, b; islinear=true, ishermitian=false)
+    m = 100
+    ks = KrylovSubspace{complex(eltype(A))}(2n, m)
+    ksA = KrylovSubspace{complex(eltype(A))}(n, m)
+    # Abar = [A I; 0I 0I]
+    z0 = zeros(ComplexF64, n)
+    # Abar!(ArrayPartition(rand(n), rand(n))) |> display
+    wa = zeros(ComplexF64, n, 2)
+    function solve_int(vrho0)
+
+        # sol = expv(tmax, Abar, vcat(z0, vrho0))
+        # out = sol[1:n]
+        # b[1:n] .= z0
+        # bp = ArrayPartition(z0, vrho0)
+        # arnoldi!(ks, Abar, b)
+        # sol = expv(tmax, Abar, b)
+
+        b[n+1:end] .= vrho0
+        # arnoldi!(ks, fo, b; tol=abstol)
+        # sol = expv!(w, tmax, ks)
+        # out = @view(sol[1:n])
+
+        # count = 0
+        # arnoldi!(ksA, A, vrho0; tol=abstol, m)
+        # sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
+        # out = tmax * sol[:, 2]
+        # while errest > abstol && count < 10
+        #     count +=1
+        #     m = 2 * m
+        #     arnoldi!(ksA, A, vrho0; tol=abstol, m)
+        #     sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
+        #     out = tmax * sol[:, 2]
+        # println("count:", count)
+        # println("m:",m)
+        # println("errest:",errest)
+        # end
+
+        # sol, info = expintegrator(fAbar, tmax, b)
+        # out = @view(sol[1:n])# + sol3
+        # display(sol)
+        # println(info)
+
+        sol, info = expintegrator(A, tmax, 0*vrho0, vrho0)
+        out = sol
+        # display(sol)
+        # println(info)
+
+        [real(out' * op) for op in current_ops]
+        # [real(op' * Ut * vrho0) for op in current_ops]
+    end
+    reduce(hcat, map(rho0 -> solve_int(vecrep(rho0, ls)), ens.rho0s))
+end
+@time s1 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:2], tmax; abstol, reltol, alg=Exponentiation(), int_alg);
+@time s2 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:2], tmax; abstol, reltol, alg=DP8(), int_alg);
+@profview run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:2], tmax; abstol, reltol, alg=Exponentiation(), int_alg);
+
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg=DP8(); int_alg, ensemblealg=EnsembleThreads(), kwargs...)
     tspan = (0, tmax)
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
@@ -159,7 +269,6 @@ function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg
     ts = range(0, tmax, 200)
     eprob = EnsembleProblem(prob;
         output_func=(sol, i) -> ([real(tr(sol(t)' * op)) for t in ts, op in current_ops], false),
-        prob_func,
         reduction=(u, data, I) -> (append!(u, data), false))
     solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), abstol, kwargs...)
 end
@@ -172,12 +281,20 @@ function run_reservoir_ensemble(res::IntegratedQuantumReservoir, εs, initial_st
     return (; integrated, ensemble, time_traces)
 end
 function integrated_current(sol, tmax, current_ops; int_alg, kwargs...)
-    function f(t, p)
-        [real(tr(sol(t)' * op)) for op in current_ops]
+    outsol = sol(0.0)
+    # T = promote_type(eltype(outsol), eltype(eltype(current_ops)))
+    function f(t, outsol)::Vector{Float64}
+        [real((sol(outsol, t)' * op)) for op in current_ops]
     end
+    # function f(out, t, outsol)
+    #     for n in eachindex(current_ops)
+    #         out[n] = real(tr(sol(outsol, t)' * op[n]))
+    #     end
+    # end
+    # integrand_prototype = zeros(T, length(current_ops))
     IntegralFunction(f)
-    domain = (0, tmax)
-    prob = IntegralProblem(f, domain)
+    domain = (zero(tmax), tmax)
+    prob = IntegralProblem(f, domain, outsol)
     sol = solve(prob, int_alg; kwargs...)
 end
 ##
@@ -194,43 +311,53 @@ function loss_function_density_matrix(W, test_sols)
     y_pred = reconstructed_data(W, test_sols.integrated)
     y_test = test_sols.ensemble.data
     losses = map(norm ∘ get_density_matrix ∘ -, eachcol(y_pred), eachcol(y_test))
-    (; mean=mean(losses), std=std(losses))
+    mean(losses)
 end
 ##
 μmin = -1e5
-μs = [-1]
+μs = -1 .* [1, 1]
 T = 10
-Nres_layers = 1
-Nres = 10
+Nres_layers = 2
+Nres = 50
 Nmeas = 5
 Nleads = length(μs)
 rc = ReservoirConnections(Nres_layers, length(μs))
 reservoir_parameters = [random_static_parameters(rc) for n in 1:Nres] #Many random reservoirs to get statistics of performance
 qd_level_measurements = [Dict(l => 5 * (rand() - 0.5) for l in rc.labels) for i in 1:Nmeas] #Each configuration of dot levels gives a measurement
 ##
-reservoir = initialize_reservoir(rc, reservoir_parameters[1], (1, 0, 1), (T, μs), μmin)
+reservoir = initialize_reservoir(rc, reservoir_parameters[1], (1, 1, 1), (T, μs), μmin)
 M_train = 20
 M_val = 100
 tmax = 100
 abstol = 1e-6
 reltol = 1e-5
 grid = let n = 4
-    (range(0, tmax^(1 // n), 100)) .^ n
+    (range(0, tmax^(1 // n), 200)) .^ n
 end
-int_alg = QuadGKJL(; order=2)
-int_alg = HCubatureJL()
+# int_alg = QuadGKJL(; order=2)
+# int_alg = HCubatureJL()
 int_alg = GaussLegendre()
 alg = DP8()
-@time training_sols_exp = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg);
+alg = Exponentiation()
+##
 
-@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg, time_trace=false);
+@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg=DP8(), int_alg);
+@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg=Exponentiation(), int_alg);
+@profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:3], tmax; abstol, reltol, alg=Exponentiation(), int_alg);
+@profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:3], tmax; abstol, reltol, alg=DP8(), int_alg, ensemblealg=EnsembleSerial());
 
-@profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg);
+@profview run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:2], tmax; abstol, reltol, alg, int_alg, ensemblealg=EnsembleSerial());
+
+@time s1 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:2], tmax; abstol=1e-1, reltol=1e-1, alg, int_alg, ensemblealg=EnsembleSerial());
+@time s3 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:2], tmax; abstol, reltol, alg=Sampled(grid), int_alg=SimpsonsRule(), ensemblealg=EnsembleSerial());
+
+#@profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg, int_alg);
 #@time run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, ensemblealg=EnsembleSerial());
-@profview run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, int_alg, ensemblealg=EnsembleSerial());
-@time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, reltol, int_alg);
-time_sols = run_reservoir(reservoir, qd_level_measurements[1], training_parameters[1:3], tmax; abstol, reltol, time_trace=true, int_alg);
-
+@profview run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, alg, int_alg, ensemblealg=EnsembleSerial());
+@time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, reltol, alg, int_alg);
+@time time_sols = run_reservoir(reservoir, qd_level_measurements[1], training_parameters[1:3], tmax; abstol, reltol, time_trace=true, alg, int_alg);
+##
+plot(time_sols.current[2])
 ##
 W = fit_output_layer(training_sols)
 loss_function_density_matrix(W, test_sols)
@@ -243,19 +370,17 @@ for params in reservoir_parameters
     W = fit_output_layer(training_sols)
     push!(data, loss_function_density_matrix(W, test_sols))
 end
-plot(map(x -> x.mean, data), yerr=map(x -> x.std, data), ylims=(0, 0.5))
-##
-(ms -> (mean(ms), std(ms)))(map(x -> x.mean, data))
+plot(data, ylims=(0, 0.5))
 ##
 data = []
-for V in range(0, 5, 5)
+for sV in range(0, 5, 5)
     localdata = []
     for params in reservoir_parameters
         reservoir = initialize_reservoir(rc, params, (1, sV, 1), (T, μs), μmin)
         @time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol)
         @time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol)
         W = fit_output_layer(training_sols)
-        push!(localdata, loss_function_density_matrix(W, test_sols).mean)
+        push!(localdata, loss_function_density_matrix(W, test_sols))
     end
     push!(data, [mean(localdata), std(localdata)])
 end
