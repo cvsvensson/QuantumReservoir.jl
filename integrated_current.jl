@@ -8,6 +8,7 @@ using OrdinaryDiffEq
 using Statistics
 using Folds
 using Random
+using LinearMaps
 # using DiffEqCallbacks
 using Integrals, FastGaussQuadrature
 includet("misc.jl")
@@ -23,7 +24,7 @@ struct ReservoirConnections{L,C,Cl}
     labels::L
     Ilabels::L
     Ihalflabels::L
-    RLabels::L
+    Rlabels::L
     hopping_labels::C
     Iconnections::C
     Rconnections::C
@@ -53,87 +54,159 @@ end
 scale_dict(d, s) = Dict(map(p -> p[1] => s * p[2], collect(d)))
 scale_dicts(ds, ss) = map(scale_dict, ds, ss)
 
-struct IntegratedQuantumReservoir{C,RC,Hf,Lf}
+struct IntegratedQuantumReservoir{C,CI,CR,RC,Hf,L}
     c::C
+    cI::CI
+    cR::CR
     rc::RC
     Hfunc::Hf
-    leadsfunc::Lf
+    leads::L
 end
 
-function get_leads(c, lead_connections, Ilabels, Γ, T, μ, μmin=-1000)
-    leads = Tuple(NormalLead(sum(c[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in lead_connections)
-    input_dissipator = CombinedLead(Tuple(c[i]' for i in Ilabels); T, μ=μmin)
-    leads0 = (input_dissipator, leads...)
-    return leads0, leads
-end
+# function get_leads(c, lead_connections, Ilabels, Γ, T, μ, μmin=-1000)
+#     leads = Tuple(NormalLead(sum(c[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in lead_connections)
+#     input_dissipator = CombinedLead(Tuple(c[i]' for i in Ilabels); T, μ=μmin)
+#     leads0 = (input_dissipator, leads...)
+#     return leads0, leads
+# end
 function static_hamiltonian(c, rc::ReservoirConnections, (J, V), (sJ, sV))
-    HR = sJ * hopping_hamiltonian(c, J; labels=rc.Rconnections)
-    HI = sJ * hopping_hamiltonian(c, J; labels=rc.Iconnections)
+    HRJ = sJ * hopping_hamiltonian(c, J; labels=rc.Rconnections)
+    HIJ = sJ * hopping_hamiltonian(c, J; labels=rc.Iconnections)
     HIR = sJ * hopping_hamiltonian(c, J; labels=rc.IRconnections)
-    HV = sV * coulomb_hamiltonian(c, V; labels=rc.hopping_labels)
-    H0 = HR + HI + HV
-    H = H0 + HIR
-    return H0, H
+    HIV = sV * coulomb_hamiltonian(c, V; labels=rc.Iconnections)
+    HRV = sV * coulomb_hamiltonian(c, V; labels=rc.Rconnections)
+    HIV = sV * coulomb_hamiltonian(c, V; labels=rc.IRconnections)
+
+    HI0 = HIJ + HIV
+    HR0 = HRJ + HRV
+    H = HR0 + HI0 + HIR
+    return HI0, HR0, H
 end
 function initialize_reservoir(rc, (J, V, Γ), (sJ, sV, sΓ), (T, μ), μmin)
     qn = QuantumDots.fermionnumber
-    c = FermionBasis(rc.labels; qn)
-    static_H0, static_H = static_hamiltonian(c, rc, (J, V), (sJ, sV))
+    cI = FermionBasis(rc.Ilabels; qn)
+    cR = FermionBasis(rc.Rlabels; qn)
+    c = wedge(cI, cR)#FermionBasis(rc.labels; qn)
+
+    static_HI = sJ * hopping_hamiltonian(cI, J; labels=rc.Iconnections) + sV * coulomb_hamiltonian(cI, V; labels=rc.Iconnections)
+    static_HR = sJ * hopping_hamiltonian(cR, J; labels=rc.Rconnections) + sV * coulomb_hamiltonian(cR, V; labels=rc.Rconnections)
+    static_HIR = sJ * hopping_hamiltonian(c, J; labels=rc.hopping_labels) + sV * coulomb_hamiltonian(c, V; labels=rc.hopping_labels)
+    static_HIR0 = sJ * hopping_hamiltonian(c, J; labels=rc.Iconnections) + sV * coulomb_hamiltonian(c, V; labels=rc.Iconnections) + sJ * hopping_hamiltonian(c, J; labels=rc.Rconnections) + sV * coulomb_hamiltonian(c, V; labels=rc.Rconnections)
     function get_hamiltonian(ϵ)
-        Hqd = qd_level_hamiltonian(c, ϵ; labels=rc.RLabels)
-        Hqd0 = qd_level_hamiltonian(c, ϵ)
-        H0 = static_H0 + Hqd0
-        H = static_H + Hqd
-        return H0, H
+        HI = static_HI + qd_level_hamiltonian(cI, ϵ; labels=rc.Ilabels)
+        HR = static_HR + qd_level_hamiltonian(cR, ϵ; labels=rc.Rlabels)
+        Hϵ = qd_level_hamiltonian(c, ϵ)
+        HIR = static_HIR + Hϵ
+        HIR0 = static_HIR0 + Hϵ
+        return HI, HR, HIR, HIR0
     end
-    leads0, leads = get_leads(c, rc.lead_connections, rc.Ilabels, scale_dict(Γ, sΓ), T, μ, μmin)
-    _get_leads() = (leads0, leads)
-    return IntegratedQuantumReservoir(c, rc, get_hamiltonian, _get_leads)
+    leadsR0 = length(cR) > 0 ? Tuple(NormalLead(sum(cR[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in rc.lead_connections) : tuple()
+    leads = Tuple(NormalLead(sum(c[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in rc.lead_connections)
+    leadsI0 = tuple(CombinedLead(Tuple(cI[i]' for i in rc.Ilabels); T, μ=μmin))
+    leadsIR0 = length(cR) > 0 ? (CombinedLead(Tuple(c[i]' for i in rc.Ilabels); T, μ=μmin), leadsIR...) : (CombinedLead(Tuple(c[i]' for i in rc.Ilabels); T, μ=μmin),)
+    # leads0, leads = get_leads(c, rc.lead_connections, rc.Ilabels, scale_dict(Γ, sΓ), T, μ, μmin)
+    # _get_leads() = (leads0, leads)
+    return IntegratedQuantumReservoir(c, cI, cR, rc, get_hamiltonian, (; leadsR0, leadsI0, leadsIR0, leads))
 end
 
 get_lindblad(H0, leads0, lindbladian::DenseLindblad) = LindbladSystem(H0, leads0)
 get_lindblad(H0, leads0, lindbladian::LazyLindblad) = LazyLindbladSystem(H0, leads0)
 
-function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parameters, tmax; alg=ROCK4(), time_trace=false, ss_abstol=1e-6, int_alg=GaussLegendre(), lindbladian=DenseLindblad(), kwargs...)
-    H0, H = res.Hfunc(ε)
-    leads0, leads = res.leadsfunc()
+function get_initial_state(res, ε, lindbladian; abstol)
+    HI, HR, HIR, HIR0 = res.Hfunc(ε)
+    (; leadsI0, leadsR0, leadsIR0, leads) = res.leads
+
+    lsI = get_lindblad(HI, leadsI0, lindbladian)
+    probI = StationaryStateProblem(lsI)
+    rhointernalI = solve(probI, LinearSolve.KrylovJL_LSMR(); abstol=abstol)
+    rhoI = QuantumDots.tomatrix(rhointernalI, lsI)
+    normalize_rho!(rhoI)
+    rhoIvec = vecrep(rhoI, lsI)
+
+    if length(res.cR) > 0
+        lsR = get_lindblad(HR, leadsR0, lindbladian)
+        probR = StationaryStateProblem(lsR)
+        rhointernalR = solve(probR, LinearSolve.KrylovJL_LSMR(); abstol=abstol)
+        rhoR = QuantumDots.tomatrix(rhointernalR, lsR)
+        normalize_rho!(rhoR)
+        rhoRvec = vecrep(rhoR, lsR)
+    else
+        rhoRvec = [1]
+        rhoR = [1;;]
+        lsR = nothing
+    end
+
+    lsIR = get_lindblad(HIR, leads, lindbladian)
+    rhoIR = wedge(rhoI, res.cI, rhoR, res.cR, res.c)
+    rhoIRvec = vecrep(rhoIR, lsIR)
+    lm = LinearMap{eltype(rhoIR)}(rhoIvec -> vecrep(wedge(QuantumDots.tomatrix(rhoIvec, lsI), res.cI, rhoR, res.cR, res.c), lsIR), length(rhoIRvec), length(rhoIvec))
+
+    lsIR2 = get_lindblad(HIR0, leadsIR0, lindbladian)
+    probIR2 = StationaryStateProblem(lsIR2)
+    rhointernalIR2 = solve(probIR2, LinearSolve.KrylovJL_LSMR(); abstol=abstol)
+    rhoIR2 = QuantumDots.tomatrix(rhointernalIR2, lsIR2)
+    normalize_rho!(rhoIR2)
+    if norm(rhoIR - rhoIR2) > 100 * (abstol)
+        @warn "Inconsistent initial states" norm(rhoIR - rhoIR2) abstol
+    end
+
+    return (; I=(ls=lsI, rhovec=rhointernalI, rho=rhoI), R=(ls=lsR, rho=rhoR, rhovec=rhoRvec), IR=(ls=lsIR, rhovec=rhoIRvec, rhovec2=vecrep(rhoIR2, lsIR), rho=rhoIR), lmap=Matrix(lm), vecrep=Base.Fix2(vecrep, lsIR))
+end
+
+
+function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parameters, tmax, alg; time_trace=false, ss_abstol=1e-6, lindbladian=DenseLindblad(), kwargs...)
+    # H0, H = res.Hfunc(ε)
+    # leads0, leadsR,leads = res.leadsfunc()
     c = res.c
     particle_number = blockdiagonal(numberoperator(c), c)
 
-    ls0 = get_lindblad(H0, leads0, lindbladian)
-    # ls0 = LindbladSystem(H0, leads0)
-    prob0 = StationaryStateProblem(ls0)
-    rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=ss_abstol)
-    rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
-    normalize_rho!(rho0)
-    # rhointernal0 = vecrep(rho0, ls0)
-    rhointernal0 = QuantumDots.internal_rep(rho0, ls0)
-    @assert isapprox(tr(rho0), 1; atol=1e-3) "tr(ρ) = $(tr(rho0)) != 1"
-    # ls = LindbladSystem(H, leads)
-    ls = get_lindblad(H, leads, lindbladian)
+    # ls0 = get_lindblad(H0, leads0, lindbladian)
+    # # ls0 = LindbladSystem(H0, leads0)
+    # prob0 = StationaryStateProblem(ls0)
+    # rhointernal0 = solve(prob0, LinearSolve.KrylovJL_LSMR(); abstol=ss_abstol)
+    # rho0 = QuantumDots.tomatrix(rhointernal0, ls0)
+    # normalize_rho!(rho0)
+    # # rhointernal0 = vecrep(rho0, ls0)
+    # rhointernal0 = QuantumDots.internal_rep(rho0, ls0)
+    # @assert isapprox(tr(rho0), 1; atol=1e-3) "tr(ρ) = $(tr(rho0)) != 1"
+    # # ls = LindbladSystem(H, leads)
+    # ls = get_lindblad(H, leads, lindbladian)
+
+    initials = get_initial_state(res, ε, lindbladian; abstol=ss_abstol)
+    ls = initials.IR.ls
     internal_N = QuantumDots.internal_rep(particle_number, ls)
-
     current_ops = map(diss -> vecrep(diss' * internal_N, ls), ls.dissipators)
-
+    rho0vec = initials.IR.rhovec
+    rho0mat = QuantumDots.tomatrix(rho0vec, ls)
     #let's compare with measurement evolution
     # A = QuantumDots.LinearOperator(ls)'
     # mm = mapreduce(op -> solve_int(A, tmax, op; abstol), hcat, current_ops)
 
-    rho0s = generate_initial_states(initial_state_parameters, rho0, c)
+    rho0s = generate_initial_states(initial_state_parameters, rho0mat, c)
+    rhoI0s = generate_initial_states(initial_state_parameters, initials.I.rho, res.cI)
     data = training_data(rho0s, res.c, res.rc.Ihalflabels, res.rc.Ilabels)
+    dataI = training_data(rhoI0s, res.cI, res.rc.Ihalflabels, res.rc.Ilabels)
     ens = InitialEnsemble{typeof(rho0s),typeof(data)}(rho0s, data)
-    results = integrated_current(ls, ens, tmax, current_ops, alg; int_alg, kwargs...)
-    current = time_trace ? get_current_time_trace(ls, ens, tmax, current_ops; alg, kwargs...) : missing
+    ensI = InitialEnsemble{typeof(rhoI0s),typeof(dataI)}(rhoI0s, dataI)
+    vrhoI0s = map(rho -> vecrep(rho, initials.I.ls), rhoI0s)
+    vecensI = InitialEnsemble{typeof(vrhoI0s),typeof(dataI)}(vrhoI0s, dataI)
+    results = integrated_current(ls, ens, tmax, current_ops, alg; kwargs...)
+    current = time_trace ? get_current_time_trace(ls, ens, tmax, current_ops; kwargs...) : missing
 
     # integrated2 = mapreduce(rho -> mm' * vecrep(rho, ls), hcat, rho0s)
-    return (; integrated=results, ensemble=ens, current)
+    return (; integrated=results, ensemble=ens, current, ls, ensembleI=ensI, vecensembleI=vecensI, initials)
 end
 
 
 struct Sampled{G}
     grid::G
 end
-struct Exponentiation end
+struct Exponentiation{K}
+    alg::K
+end
+struct EXP_krylovkit end
+struct EXP_sciml end
+Exponentiation() = Exponentiation(EXP_krylovkit())
 function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, solver::Sampled; int_alg, kwargs...)
     grid = solver.grid
     @assert tmax ≈ grid[end]
@@ -145,66 +218,52 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, solver:
     mapreduce(solve_int ∘ Base.Fix2(vecrep, ls), hcat, ens.rho0s)
 end
 (m::SciMLOperators.AbstractSciMLOperator)(v) = m(v, SciMLBase.NullParameters(), 0.0)
-function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Exponentiation; kwargs...)
-    # An = Matrix(QuantumDots.LinearOperator(ls; normalizer=true))
-
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Exponentiation{EXP_krylovkit}; kwargs...)
     A = QuantumDots.LinearOperator(ls; normalizer=false)
-    # rhov0 = complex(vecrep(first(ens.rho0s), ls))
-    # ## prepare exponentiation
-    # out = deepcopy(rhov0)
-    # ## prepare linsolve
-    # prob = LinearProblem(A, rhov0)
-    # linsolve = init(prob)
-
-    # Abar = [Matrix(A) I; 0I 0I]
+    u0 = complex(zero(vecrep(first(ens.rho0s), ls)))
+    mapreduce(rho0 -> [real(krylovkit_exponentiation(A, tmax, u0, vecrep(rho0, ls); abstol)' * op) for op in current_ops], hcat, ens.rho0s)
+end
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Exponentiation{EXP_sciml}; kwargs...)
+    A = QuantumDots.LinearOperator(ls; normalizer=false)
     n = size(A, 1)
+    wa = zeros(ComplexF64, n, 2)
+    maxiter = 100
+    ksA = KrylovSubspace{complex(eltype(A))}(n, maxiter)
+    mapreduce(rho0 -> [real(sciml_exponentiation(A, tmax, vecrep(rho0, ls), (wa, ksA); abstol)' * op) for op in current_ops], hcat, ens.rho0s)
+end
 
-    # expabar = exponential!(Abar * tmax)
-    # Ut = expabar[1:n, n+1:end]
-    # out = deepcopy(vecrep(first(ens.rho0s), ls))
-    function fAbar!(w, v, p, t)
-        X = @view(v[1:n])
-        U = @view(v[n+1:end])
-        mul!(@view(w[1:n]), A, X)
-        w[1:n] .+= U
-        w[n+1:end] .= 0.0
-        w
+function sciml_exponentiation(A, tmax, vrho0, (wa, ksA), m=50; abstol)
+    count = 0
+    arnoldi!(ksA, A, vrho0; tol=abstol, m)
+    sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
+    out = tmax * sol[:, 2]
+    while errest > abstol && count < 10
+        count += 1
+        m = 2 * m
+        arnoldi!(ksA, A, vrho0; tol=abstol, m)
+        sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
+        out = tmax * sol[:, 2]
+        @warn count m errest
     end
-    # b = zeros(ComplexF64, 2n)
-    # w = zeros(ComplexF64, 2n)
-    # fo = FunctionOperator(fAbar!, b; islinear=true, ishermitian=false)
-    # m = 100
-    # ks = KrylovSubspace{complex(eltype(A))}(2n, m)
-    # ksA = KrylovSubspace{complex(eltype(A))}(n, m)
-    # wa = zeros(ComplexF64, n, 2)
-    # u0 = zeros(ComplexF64, n)
-    mapreduce(rho0 -> [real(solve_int(A, tmax, vecrep(rho0, ls); abstol)' * op) for op in current_ops], hcat, ens.rho0s)
+    out
 end
-function solve_int(A, tmax, vrho0, u0=zero(vrho0); abstol)
-    # count = 0
-    # arnoldi!(ksA, A, vrho0; tol=abstol, m)
-    # sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
-    # out = tmax * sol[:, 2]
-    # while errest > abstol && count < 10
-    #     count += 1
-    #     m = 2 * m
-    #     arnoldi!(ksA, A, vrho0; tol=abstol, m)
-    #     sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
-    #     out = tmax * sol[:, 2]
-    #     @debug count m errest
-    # end
-
-    # sol, info = expintegrator(fAbar, tmax, b)
-    # out = @view(sol[1:n])# + sol3
-
-    sol, info = expintegrator(A, tmax, u0, vrho0; tol=abstol, krylovdim=50)
+function krylovkit_exponentiation(A, tmax, u0, vrho0; abstol, krylovdim=50, maxiter=100)
+    sol, info = expintegrator(A, tmax, u0, vrho0; tol=abstol, krylovdim, maxiter)
+    count = 0
+    while !(info.converged > 0) && count < 2
+        @warn info krylovdim maxiter count
+        count += 1
+        krylovdim = 2 * krylovdim
+        maxiter = 2 * maxiter
+        sol, info = expintegrator(A, tmax, u0, vrho0; tol=abstol, krylovdim, maxiter)
+    end
     @debug info
-    out = sol
-    # [real(out' * op) for op in current_ops]
+    sol
 end
 
-function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg=DP8(); int_alg, ensemblealg=EnsembleThreads(), kwargs...)
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, _alg::ODE; int_alg, ensemblealg=EnsembleThreads(), kwargs...)
     tspan = (0, tmax)
+    alg = _alg.alg
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
     prob = ODEProblem(A, u0, tspan)
@@ -218,6 +277,33 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg=DP8
         reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
     solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
 end
+function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, _alg::IntegratedODE; ensemblealg=EnsembleThreads(), kwargs...)
+    domain = (zero(tmax), tmax)
+    alg = _alg.alg
+    u0 = vecrep(first(ens.rho0s), ls)
+    A = QuantumDots.LinearOperator(ls)
+    # prob = ODEProblem(A, u0, tspan)
+    # prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= op, zero(complex(op)), domain; kwargs...)
+    u0 = zero(complex(vecrep(first(ens.rho0s), ls)))
+    sols = []
+    for rho0 in ens.rho0s
+        rho0V = vecrep(rho0, ls)
+        prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= rho0V, u0, domain; kwargs...)
+        sol = solve(prob, alg; abstol, kwargs...)
+        push!(sols, [real(sol(tmax)' * op) for op in current_ops])
+    end
+    reduce(hcat, sols)
+    # function prob_func(prob, i, repeat)
+    #     prob.u0 .= vecrep(ens.rho0s[i], ls)
+    #     prob
+    # end
+    # eprob = EnsembleProblem(prob;
+    #     output_func=(sol, i) -> ([real(sol(tmax)' * op) for op in current_ops], false),
+    #     prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
+    #     reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+
+    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
+end
 
 function current_integrand(ts, ls, vrho0, current_ops; abstol, kwargs...)
     A = QuantumDots.LinearOperator(ls)
@@ -228,25 +314,40 @@ function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg
     tspan = (0, tmax)
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
-    prob = ODEProblem(A, u0, tspan)
-    function prob_func(prob, i, repeat)
-        prob.u0 .= vecrep(ens.rho0s[i], ls)
-        prob
-    end
+
+    #Something wrong with threading for the ensemble? Every solution is the same. 
+    # prob = ODEProblem(A, u0, tspan)
+    # function prob_func(prob, i, repeat)
+    #     prob.u0 .= vecrep(ens.rho0s[i], ls)
+    #     prob
+    # end
     ts = range(0, tmax, 200)
-    eprob = EnsembleProblem(prob;
-        output_func=(sol, i) -> ([real(tr(sol(t)' * op)) for t in ts, op in current_ops], false),
-        reduction=(u, data, I) -> (append!(u, data), false))
-    solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), abstol, kwargs...)
+    # eprob = EnsembleProblem(prob;
+    #     output_func=(sol, i) -> ([real(tr(sol(t)' * op)) for t in ts, op in current_ops], false),
+    #     reduction=(u, data, I) -> (append!(u, data), false))
+    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), abstol, kwargs...)
+
+    currents = Matrix{Float64}[]
+    for rho0 in ens.rho0s
+        u0 = vecrep(rho0, ls)
+        prob = ODEProblem(A, u0, tspan)
+        sol = solve(prob, alg; abstol, kwargs...)
+        push!(currents, [real(tr(sol(t)' * op)) for t in ts, op in current_ops])
+    end
+    currents
 end
 
-function run_reservoir_ensemble(res::IntegratedQuantumReservoir, εs, initial_state_parameters, tmax; kwargs...)
-    sols = [run_reservoir(res, ε, initial_state_parameters, tmax; kwargs...) for ε in εs]
+function run_reservoir_ensemble(res::IntegratedQuantumReservoir, εs, initial_state_parameters, tmax, alg; kwargs...)
+    sols = [run_reservoir(res, ε, initial_state_parameters, tmax, alg; kwargs...) for ε in εs]
     integrated = mapreduce(x -> x.integrated, vcat, sols)
-    # integrated2 = mapreduce(x -> x.integrated2, vcat, sols)
     ensemble = first(sols).ensemble
+    ensembleI = first(sols).ensembleI
+    vecensembleI = first(sols).vecensembleI
     time_traces = map(x -> x.current, sols)
-    return (; integrated, ensemble, time_traces)
+
+    other_keys = [key for key in keys(sols[1]) if !(key ∈ [:integrated, :ensemble, :ensembleI, :vecensembleI, :time_traces])]
+    nt = NamedTuple([key => map(sol -> sol[key], sols) for key in other_keys])
+    return merge((; integrated, ensemble, ensembleI, vecensembleI, time_traces), nt)
 end
 function integrated_current(sol, tmax, current_ops; int_alg, kwargs...)
     outsol = sol(0.0)
@@ -260,19 +361,71 @@ function integrated_current(sol, tmax, current_ops; int_alg, kwargs...)
     sol = solve(prob, int_alg; kwargs...)
 end
 
-function measurement_matrix(res::IntegratedQuantumReservoir, εs, tmax; kwargs...)
-    sols = [_measurement_matrix(res, ε, tmax; kwargs...) for ε in εs]
-    reduce(hcat, sols)
+function measurement_matrix(res::IntegratedQuantumReservoir, εs, tmax, alg; kwargs...)
+    sols = [_measurement_matrix(res, ε, tmax, alg; kwargs...) for ε in εs]
+    mat = mapreduce(sol -> sol.mat, vcat, sols)
+    other_keys = [key for key in keys(sols[1]) if !(key ∈ [:mat])]
+    nt = NamedTuple([key => map(sol -> sol[key], sols) for key in other_keys])
+    return merge((; mat), nt)
 end
-function _measurement_matrix(res::IntegratedQuantumReservoir, ε, tmax; lindbladian=DenseLindblad(), abstol, kwargs...)
-    _, H = res.Hfunc(ε)
-    _, leads = res.leadsfunc()
-    particle_number = blockdiagonal(numberoperator(res.c), res.c)
-    ls = get_lindblad(H, leads, lindbladian)
+function _measurement_matrix(res::IntegratedQuantumReservoir, ε, tmax, alg; lindbladian=DenseLindblad(), abstol, kwargs...)
+    c = res.c
+    particle_number = blockdiagonal(numberoperator(c), c)
+    initials = get_initial_state(res, ε, lindbladian; abstol)
+
+    ls = initials.IR.ls
     internal_N = QuantumDots.internal_rep(particle_number, ls)
     current_ops = map(diss -> vecrep(diss' * internal_N, ls), ls.dissipators)
+    # projector = vecrep(input_N .== 1, ls)
     A = QuantumDots.LinearOperator(ls)'
-    mapreduce(op -> solve_int(A, tmax, op; abstol), hcat, current_ops)
+    mat = __measurement_matrix(A, tmax, current_ops, alg; abstol, kwargs...)
+    mat = mat' * Matrix(initials.lmap)
+    return (; mat, current_ops, initials)
+end
+# function __measurement_matrix(A,tmax, current_ops, tmax, ::Exponentiation; abstol, kwargs...)
+#     mapreduce(op -> solve_int(A, tmax, op; abstol, kwargs...), hcat, current_ops)
+# end
+function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_krylovkit}; kwargs...)
+    mapreduce(op -> krylovkit_exponentiation(A, tmax, zero(op), op; abstol), hcat, current_ops)
+end
+function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_sciml}; m=50, kwargs...)
+    n = size(A, 1)
+    wa = zeros(ComplexF64, n, 2)
+    ksA = KrylovSubspace{complex(eltype(A))}(n, m)
+    mapreduce(op -> sciml_exponentiation(A, tmax, op, (wa, ksA); abstol), hcat, current_ops)
+end
+
+struct IntegratedODE{A}
+    alg::A
+end
+struct ODE{A}
+    alg::A
+end
+ODE() = ODE(DP8())
+IntegratedODE() = IntegratedODE(DP8())
+function __measurement_matrix(A, tmax, current_ops, alg::IntegratedODE; abstol, kwargs...)
+    sols = []
+    domain = (zero(tmax), tmax)
+    for op in current_ops
+        prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= op, zero(complex(op)), domain; kwargs...)
+        sol = solve(prob, alg.alg; abstol, kwargs...)
+        push!(sols, sol(tmax))
+    end
+    reduce(hcat, sols)
+end
+function __measurement_matrix(A, tmax, current_ops, alg::ODE; int_alg, abstol, kwargs...)
+    # ts = range(0, tmax, 200)
+    sols = []
+    domain = (zero(tmax), tmax)
+    for op in current_ops
+        prob = ODEProblem(A, complex(op), domain)
+        sol = solve(prob, alg.alg; abstol, kwargs...)
+        outsol = sol(0.0)
+        probInt = IntegralProblem((u, outsol) -> sol(outsol, u), domain, outsol)
+        solInt = solve(probInt, int_alg; abstol, kwargs...)
+        push!(sols, solInt)
+    end
+    reduce(hcat, sols)
 end
 
 ##
@@ -295,7 +448,7 @@ end
 μmin = -1e5
 μs = -1 .* [1, 1]
 T = 10
-Nres_layers = 1
+Nres_layers = 0
 Nres = 50
 Nmeas = 5
 Nleads = length(μs) # Make this more general. Labels to connect leads.
@@ -307,8 +460,8 @@ reservoir = initialize_reservoir(rc, reservoir_parameters[1], (1, 1, 1), (T, μs
 M_train = 20
 M_val = 100
 tmax = 100
-abstol = 1e-6
-reltol = 1e-5
+abstol = 1e-12
+reltol = 1e-12
 grid = let n = 4
     (range(0, tmax^(1 // n), 200)) .^ n
 end
@@ -317,16 +470,19 @@ end
 int_alg = GaussLegendre()
 alg = DP8()
 alg = Exponentiation()
-
 lindbladian = DenseLindblad()
 ##
+@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg=DP8(), int_alg, lindbladian);
+@time training_sols2 = measurement_matrix(reservoir, qd_level_measurements, tmax; abstol, reltol);
+@time training_sols3 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg=Exponentiation(), int_alg, lindbladian);
 
-@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements,
-    training_parameters[1:M_train], tmax; abstol, reltol, alg=DP8(), int_alg, lindbladian);
+inte = mapreduce(rho0 -> map(Base.Fix1(dot, rho0), eachrow(training_sols2.mat)), hcat, training_sols.vecensembleI.rho0s) |> real
+training_sols.integrated
+inte - training_sols.integrated .|> abs |> maximum
+inte - training_sols3.integrated .|> abs |> maximum
 
-measurement_matrix(reservoir, qd_level_measurements, tmax; abstol, reltol)
-
-@time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg=Exponentiation(), int_alg, lindbladian);
+##
+@time training_sols3 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol, reltol, alg=Exponentiation(), int_alg, lindbladian);
 @profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:3], tmax; abstol, reltol, alg=Exponentiation(), int_alg);
 @profview training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:3], tmax; abstol, reltol, alg=DP8(), int_alg, ensemblealg=EnsembleSerial());
 
@@ -339,26 +495,23 @@ measurement_matrix(reservoir, qd_level_measurements, tmax; abstol, reltol)
 #@time run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, ensemblealg=EnsembleSerial());
 @profview run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, alg, int_alg, ensemblealg=EnsembleSerial());
 @time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:M_val], tmax; abstol, reltol, alg, int_alg);
-@time time_sols = run_reservoir(reservoir, qd_level_measurements[1], training_parameters[1:3], tmax; abstol, reltol, time_trace=true, alg=DP8(), int_alg);
+@time time_sols = run_reservoir(reservoir, qd_level_measurements[1], training_parameters[1:3], tmax; abstol, reltol, time_trace=true, alg=DP8(), int_alg, ensemblealg=EnsembleSerial());
 ##
-plot(time_sols.current[2])
+foreach(c -> plot(c) |> display, time_sols.current)
 ##
 W = fit_output_layer(training_sols)
 loss_function_density_matrix(W, test_sols)
 ##
 data = []
-datacond = []
-datamm = []
 for params in reservoir_parameters[1:20]
     reservoir = initialize_reservoir(rc, params, (1, 1, 1), (T, μs), μmin)
     @time training_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax; abstol)
     @time test_sols = run_reservoir_ensemble(reservoir, qd_level_measurements, validation_parameters[1:100], tmax; abstol)
     W = fit_output_layer(training_sols)
     mm = measurement_matrix(reservoir, qd_level_measurements, tmax; abstol)
-    c = cond(mm)
-    push!(datacond, c)
-    push!(datamm, mm)
-    push!(data, loss_function_density_matrix(W, test_sols))
+    c = cond(mm.mat)
+    loss = loss_function_density_matrix(W, test_sols)
+    push!(data, (; loss, cond=c, mm.mat, W))
 end
 plot(data, ylims=(0, 0.5))
 ##

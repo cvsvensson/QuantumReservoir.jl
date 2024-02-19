@@ -1,6 +1,7 @@
 abstract type AbstractPU end
 struct CPU <: AbstractPU end
 
+hopping_hamiltonian(c::FermionBasis{0}, J; labels=keys(J)) = 0
 function hopping_hamiltonian(c, J; labels=keys(J))
     T = valtype(J)
     H = deepcopy(zero(T) * first(c))
@@ -10,6 +11,7 @@ function hopping_hamiltonian(c, J; labels=keys(J))
     end
     return blockdiagonal(H, c)
 end
+coulomb_hamiltonian(c::FermionBasis{0}, V; labels=keys(V)) = 0
 function coulomb_hamiltonian(c, V; labels=keys(V))
     T = valtype(V)
     H = deepcopy(zero(T) * first(c))
@@ -19,6 +21,7 @@ function coulomb_hamiltonian(c, V; labels=keys(V))
     end
     return blockdiagonal(H, c)
 end
+qd_level_hamiltonian(c::FermionBasis{0}, ε; labels=keys(ε)) = 0
 function qd_level_hamiltonian(c, ε; labels=keys(ε))
     T = valtype(ε)
     H = deepcopy(zero(T) * first(c))
