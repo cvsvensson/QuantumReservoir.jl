@@ -63,6 +63,24 @@ struct IntegratedQuantumReservoir{C,CI,CR,RC,Hf,L}
     leads::L
 end
 
+struct Sampled{G}
+    grid::G
+end
+struct Exponentiation{K}
+    alg::K
+end
+struct EXP_krylovkit end
+struct EXP_sciml end
+struct EXP_sciml_full end
+struct IntegratedODE{A}
+    alg::A
+end
+struct ODE{A}
+    alg::A
+end
+ODE() = ODE(DP8())
+IntegratedODE() = IntegratedODE(DP8())
+Exponentiation() = Exponentiation(EXP_krylovkit())
 # function get_leads(c, lead_connections, Ilabels, Γ, T, μ, μmin=-1000)
 #     leads = Tuple(NormalLead(sum(c[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in lead_connections)
 #     input_dissipator = CombinedLead(Tuple(c[i]' for i in Ilabels); T, μ=μmin)
@@ -112,13 +130,13 @@ end
 get_lindblad(H0, leads0, lindbladian::DenseLindblad) = LindbladSystem(H0, leads0)
 get_lindblad(H0, leads0, lindbladian::LazyLindblad) = LazyLindbladSystem(H0, leads0)
 
-function get_initial_state(res, ε, lindbladian; abstol)
+function get_initial_state(res, ε, lindbladian; kwargs...)
     HI, HR, HIR, HIR0 = res.Hfunc(ε)
     (; leadsI0, leadsR0, leadsIR0, leads) = res.leads
 
     lsI = get_lindblad(HI, leadsI0, lindbladian)
     probI = StationaryStateProblem(lsI)
-    rhointernalI = solve(probI, LinearSolve.KrylovJL_LSMR(); abstol=abstol)
+    rhointernalI = solve(probI, LinearSolve.KrylovJL_LSMR(); kwargs...)
     rhoI = QuantumDots.tomatrix(rhointernalI, lsI)
     normalize_rho!(rhoI)
     rhoIvec = vecrep(rhoI, lsI)
@@ -126,7 +144,7 @@ function get_initial_state(res, ε, lindbladian; abstol)
     if length(res.cR) > 0
         lsR = get_lindblad(HR, leadsR0, lindbladian)
         probR = StationaryStateProblem(lsR)
-        rhointernalR = solve(probR, LinearSolve.KrylovJL_LSMR(); abstol=abstol)
+        rhointernalR = solve(probR, LinearSolve.KrylovJL_LSMR(); kwargs...)
         rhoR = QuantumDots.tomatrix(rhointernalR, lsR)
         normalize_rho!(rhoR)
         rhoRvec = vecrep(rhoR, lsR)
@@ -154,7 +172,7 @@ function get_initial_state(res, ε, lindbladian; abstol)
 end
 
 
-function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parameters, tmax, alg; time_trace=false, ss_abstol=1e-6, lindbladian=DenseLindblad(), kwargs...)
+function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parameters, tmax, alg; time_trace=false, lindbladian=DenseLindblad(), kwargs...)
     # H0, H = res.Hfunc(ε)
     # leads0, leadsR,leads = res.leadsfunc()
     c = res.c
@@ -172,10 +190,10 @@ function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parame
     # # ls = LindbladSystem(H, leads)
     # ls = get_lindblad(H, leads, lindbladian)
 
-    initials = get_initial_state(res, ε, lindbladian; abstol=ss_abstol)
+    initials = get_initial_state(res, ε, lindbladian; kwargs...)
     ls = initials.IR.ls
     internal_N = QuantumDots.internal_rep(particle_number, ls)
-    current_ops = map(diss -> vecrep(diss' * internal_N, ls), ls.dissipators)
+    current_ops = map(diss -> vecrep((diss' * internal_N), ls), ls.dissipators)
     rho0vec = initials.IR.rhovec
     rho0mat = QuantumDots.tomatrix(rho0vec, ls)
     #let's compare with measurement evolution
@@ -198,22 +216,13 @@ function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parame
 end
 
 
-struct Sampled{G}
-    grid::G
-end
-struct Exponentiation{K}
-    alg::K
-end
-struct EXP_krylovkit end
-struct EXP_sciml end
-Exponentiation() = Exponentiation(EXP_krylovkit())
 function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, solver::Sampled; int_alg, kwargs...)
     grid = solver.grid
     @assert tmax ≈ grid[end]
     function solve_int(vrho0)
         vals = current_integrand(grid, ls, vrho0, current_ops; kwargs...)
         prob = SampledIntegralProblem(vals, grid; kwargs...)
-        solve(prob, int_alg)
+        solve(prob, int_alg; kwargs...)
     end
     mapreduce(solve_int ∘ Base.Fix2(vecrep, ls), hcat, ens.rho0s)
 end
@@ -266,24 +275,31 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, _alg::O
     alg = _alg.alg
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
-    prob = ODEProblem(A, u0, tspan)
-    function prob_func(prob, i, repeat)
-        prob.u0 .= vecrep(ens.rho0s[i], ls)
-        prob
+    # prob = ODEProblem(A, u0, tspan)
+    # function prob_func(prob, i, repeat)
+    #     prob.u0 .= vecrep(ens.rho0s[i], ls)
+    #     prob
+    # end
+    # eprob = EnsembleProblem(prob;
+    #     output_func=(sol, i) -> (integrated_current(sol, tmax, current_ops; int_alg, kwargs...), false),
+    #     prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
+    #     reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
+    currents = Vector{Float64}[]
+    for rho0 in ens.rho0s
+        u0 = vecrep(rho0, ls)
+        prob = ODEProblem(A, u0, tspan)
+        sol = solve(prob, alg; abstol, kwargs...)
+        solInt = integrated_current(sol, tmax, current_ops; int_alg, kwargs...)
+        push!(currents, solInt.u)
     end
-    eprob = EnsembleProblem(prob;
-        output_func=(sol, i) -> (integrated_current(sol, tmax, current_ops; int_alg, kwargs...), false),
-        prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
-        reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
-    solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
+    reduce(hcat, currents)
 end
 function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, _alg::IntegratedODE; ensemblealg=EnsembleThreads(), kwargs...)
     domain = (zero(tmax), tmax)
     alg = _alg.alg
     u0 = vecrep(first(ens.rho0s), ls)
     A = QuantumDots.LinearOperator(ls)
-    # prob = ODEProblem(A, u0, tspan)
-    # prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= op, zero(complex(op)), domain; kwargs...)
     u0 = zero(complex(vecrep(first(ens.rho0s), ls)))
     sols = []
     for rho0 in ens.rho0s
@@ -382,9 +398,6 @@ function _measurement_matrix(res::IntegratedQuantumReservoir, ε, tmax, alg; lin
     mat = mat' * Matrix(initials.lmap)
     return (; mat, current_ops, initials)
 end
-# function __measurement_matrix(A,tmax, current_ops, tmax, ::Exponentiation; abstol, kwargs...)
-#     mapreduce(op -> solve_int(A, tmax, op; abstol, kwargs...), hcat, current_ops)
-# end
 function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_krylovkit}; kwargs...)
     mapreduce(op -> krylovkit_exponentiation(A, tmax, zero(op), op; abstol), hcat, current_ops)
 end
@@ -394,15 +407,15 @@ function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_scim
     ksA = KrylovSubspace{complex(eltype(A))}(n, m)
     mapreduce(op -> sciml_exponentiation(A, tmax, op, (wa, ksA); abstol), hcat, current_ops)
 end
+function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_sciml_full}; kwargs...)
+    Abar = [Matrix(A) I; 0I 0I]
+    Ufull = exponential!(Abar * tmax)
+    n = size(A, 1)
+    U = Ufull[1:n, n+1:end]
+    mapreduce(Base.Fix1(*, U,), hcat, current_ops)
+end
 
-struct IntegratedODE{A}
-    alg::A
-end
-struct ODE{A}
-    alg::A
-end
-ODE() = ODE(DP8())
-IntegratedODE() = IntegratedODE(DP8())
+
 function __measurement_matrix(A, tmax, current_ops, alg::IntegratedODE; abstol, kwargs...)
     sols = []
     domain = (zero(tmax), tmax)
