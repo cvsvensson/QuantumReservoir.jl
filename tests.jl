@@ -17,8 +17,9 @@ mm1.mat ≈ mm2.mat ≈ mm3.mat ≈ mm4.mat ≈ mm5.mat
 @time sols1 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax, ODE(DP8()); abstol, reltol, int_alg=GaussLegendre(), lindbladian);
 @time sols2 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax, IntegratedODE(DP8()); abstol, reltol, lindbladian);
 @time sols3 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax, Exponentiation(); abstol, reltol, lindbladian);
+@time sols4 = run_reservoir_ensemble(reservoir, qd_level_measurements, training_parameters[1:M_train], tmax, Exponentiation(EXP_sciml()); abstol, reltol, lindbladian);
 
-[norm(sols1.integrated - sol.integrated) for sol in [sols2, sols3]] # ≈ [0.0, 0.0]
+[norm(sols1.integrated - sol.integrated) for sol in [sols2, sols3, sols4]] # ≈ [0.0, 0.0]
 
 ## compare measurement evolution and density matrix evolution
 inte = mapreduce(rho0 -> map(Base.Fix2(dot, rho0), eachcol(mm1.mat)), hcat, sols1.vecensembleI.rho0s) |> real

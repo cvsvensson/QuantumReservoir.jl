@@ -51,7 +51,7 @@ function random_nearest_hoppings(labels, s=1)
     Dict(couplings)
 end
 
-function modify_initial_state((rs, θ, ϕ), rho, c; kwargs...)
+function modify_initial_state((rs, θ, ϕ), rho, c)
     si, co = sincos(θ)
     # channels = (I, c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]', c[0, 1]' * c[0, 2]')
     channels = (c[0, 1]' * si + exp(1im * ϕ) * co * c[0, 2]',)
