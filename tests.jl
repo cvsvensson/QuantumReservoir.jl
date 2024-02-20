@@ -1,5 +1,7 @@
 lindbladian = DenseLindblad()
 tmax = 100
+abstol = 1e-12
+reltol = 1e-12
 ## test measurement_matrix
 @time mm1 = measurement_matrix(reservoir, qd_level_measurements, tmax, Exponentiation(); abstol, reltol, lindbladian);
 @time mm2 = measurement_matrix(reservoir, qd_level_measurements, tmax, Exponentiation(EXP_sciml()); abstol, reltol, lindbladian);

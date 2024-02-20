@@ -121,7 +121,7 @@ function initialize_reservoir(rc, (J, V, Γ), (sJ, sV, sΓ), (T, μ), μmin)
     leadsR0 = length(cR) > 0 ? Tuple(NormalLead(sum(cR[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in rc.lead_connections) : tuple()
     leads = Tuple(NormalLead(sum(c[N, k]' * Γ[(m, N, k)] for (N, k) in ls); T, μ=μ[m]) for (m, ls) in rc.lead_connections)
     leadsI0 = tuple(CombinedLead(Tuple(cI[i]' for i in rc.Ilabels); T, μ=μmin))
-    leadsIR0 = length(cR) > 0 ? (CombinedLead(Tuple(c[i]' for i in rc.Ilabels); T, μ=μmin), leadsIR...) : (CombinedLead(Tuple(c[i]' for i in rc.Ilabels); T, μ=μmin),)
+    leadsIR0 = length(cR) > 0 ? (CombinedLead(Tuple(c[i]' for i in rc.Ilabels); T, μ=μmin), leads...) : (CombinedLead(Tuple(c[i]' for i in rc.Ilabels); T, μ=μmin),)
     # leads0, leads = get_leads(c, rc.lead_connections, rc.Ilabels, scale_dict(Γ, sΓ), T, μ, μmin)
     # _get_leads() = (leads0, leads)
     return IntegratedQuantumReservoir(c, cI, cR, rc, get_hamiltonian, (; leadsR0, leadsI0, leadsIR0, leads))
@@ -465,7 +465,7 @@ end
 μmin = -1e5
 μs = -1 .* [1, 1]
 T = 10
-Nres_layers = 0
+Nres_layers = 1
 Nres = 50
 Nmeas = 5
 Nleads = length(μs) # Make this more general. Labels to connect leads.
