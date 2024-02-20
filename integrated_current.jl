@@ -201,13 +201,17 @@ function run_reservoir(res::IntegratedQuantumReservoir, ε, initial_state_parame
     # mm = mapreduce(op -> solve_int(A, tmax, op; abstol), hcat, current_ops)
 
     rho0s = generate_initial_states(initial_state_parameters, rho0mat, c)
-    rhoI0s = generate_initial_states(initial_state_parameters, initials.I.rho, res.cI)
     data = training_data(rho0s, res.c, res.rc.Ihalflabels, res.rc.Ilabels)
+    ens = InitialEnsemble(rho0s, data)
+
+    rhoI0s = generate_initial_states(initial_state_parameters, initials.I.rho, res.cI)
     dataI = training_data(rhoI0s, res.cI, res.rc.Ihalflabels, res.rc.Ilabels)
-    ens = InitialEnsemble{typeof(rho0s),typeof(data)}(rho0s, data)
-    ensI = InitialEnsemble{typeof(rhoI0s),typeof(dataI)}(rhoI0s, dataI)
+    ensI = InitialEnsemble(rhoI0s, dataI)
     vrhoI0s = map(rho -> vecrep(rho, initials.I.ls), rhoI0s)
-    vecensI = InitialEnsemble{typeof(vrhoI0s),typeof(dataI)}(vrhoI0s, dataI)
+    # vrhoI0s2 = map(rho -> vecrep(partial_trace(rho, res.cI, res.c), initials.I.ls), rho0s) #This is the same as vrhoI0s
+    vecensI = InitialEnsemble(vrhoI0s, dataI)
+    # vecensI = InitialEnsemble((vrhoI0s, vrhoI0s2), dataI)
+
     results = integrated_current(ls, ens, tmax, current_ops, alg; kwargs...)
     current = time_trace ? get_current_time_trace(ls, ens, tmax, current_ops; kwargs...) : missing
 
@@ -230,7 +234,7 @@ end
 function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Exponentiation{EXP_krylovkit}; kwargs...)
     A = QuantumDots.LinearOperator(ls; normalizer=false)
     u0 = complex(zero(vecrep(first(ens.rho0s), ls)))
-    mapreduce(rho0 -> [real(krylovkit_exponentiation(A, tmax, u0, vecrep(rho0, ls); abstol)' * op) for op in current_ops], hcat, ens.rho0s)
+    mapreduce(rho0 -> [real(dot(op, krylovkit_exponentiation(A, tmax, u0, vecrep(rho0, ls); abstol))) for op in current_ops], hcat, ens.rho0s)
 end
 function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Exponentiation{EXP_sciml}; kwargs...)
     A = QuantumDots.LinearOperator(ls; normalizer=false)
@@ -238,7 +242,7 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, alg::Ex
     wa = zeros(ComplexF64, n, 2)
     maxiter = 100
     ksA = KrylovSubspace{complex(eltype(A))}(n, maxiter)
-    mapreduce(rho0 -> [real(sciml_exponentiation(A, tmax, vecrep(rho0, ls), (wa, ksA); abstol)' * op) for op in current_ops], hcat, ens.rho0s)
+    mapreduce(rho0 -> [real(dot(op, sciml_exponentiation(A, tmax, vecrep(rho0, ls), (wa, ksA); abstol))) for op in current_ops], hcat, ens.rho0s)
 end
 
 function sciml_exponentiation(A, tmax, vrho0, (wa, ksA), m=50; abstol)
@@ -306,7 +310,7 @@ function integrated_current(ls, ens::InitialEnsemble, tmax, current_ops, _alg::I
         rho0V = vecrep(rho0, ls)
         prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= rho0V, u0, domain; kwargs...)
         sol = solve(prob, alg; abstol, kwargs...)
-        push!(sols, [real(sol(tmax)' * op) for op in current_ops])
+        push!(sols, [real(dot(op, sol(tmax))) for op in current_ops])
     end
     reduce(hcat, sols)
     # function prob_func(prob, i, repeat)
@@ -324,7 +328,7 @@ end
 function current_integrand(ts, ls, vrho0, current_ops; abstol, kwargs...)
     A = QuantumDots.LinearOperator(ls)
     rhos = expv_timestep(ts, A, vrho0; tol=abstol, adaptive=true)
-    [real(tr((rho)' * op)) for op in current_ops, rho in eachcol(rhos)]
+    [real(dot(op, rho)) for op in current_ops, rho in eachcol(rhos)]
 end
 function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg=ROCK4(), ensemblealg=EnsembleThreads(), abstol, kwargs...)
     tspan = (0, tmax)
@@ -348,7 +352,7 @@ function get_current_time_trace(ls, ens::InitialEnsemble, tmax, current_ops; alg
         u0 = vecrep(rho0, ls)
         prob = ODEProblem(A, u0, tspan)
         sol = solve(prob, alg; abstol, kwargs...)
-        push!(currents, [real(tr(sol(t)' * op)) for t in ts, op in current_ops])
+        push!(currents, [real(dot(op, sol(t))) for t in ts, op in current_ops])
     end
     currents
 end
@@ -369,7 +373,7 @@ function integrated_current(sol, tmax, current_ops; int_alg, kwargs...)
     outsol = sol(0.0)
     # T = promote_type(eltype(outsol), eltype(eltype(current_ops)))
     function f(t, outsol)::Vector{Float64}
-        [real((sol(outsol, t)' * op)) for op in current_ops]
+        [real(dot(op, sol(outsol, t))) for op in current_ops]
     end
     IntegralFunction(f)
     domain = (zero(tmax), tmax)
@@ -379,7 +383,7 @@ end
 
 function measurement_matrix(res::IntegratedQuantumReservoir, εs, tmax, alg; kwargs...)
     sols = [_measurement_matrix(res, ε, tmax, alg; kwargs...) for ε in εs]
-    mat = mapreduce(sol -> sol.mat, vcat, sols)
+    mat = mapreduce(sol -> sol.mat, hcat, sols)
     other_keys = [key for key in keys(sols[1]) if !(key ∈ [:mat])]
     nt = NamedTuple([key => map(sol -> sol[key], sols) for key in other_keys])
     return merge((; mat), nt)
@@ -394,8 +398,8 @@ function _measurement_matrix(res::IntegratedQuantumReservoir, ε, tmax, alg; lin
     current_ops = map(diss -> vecrep(diss' * internal_N, ls), ls.dissipators)
     # projector = vecrep(input_N .== 1, ls)
     A = QuantumDots.LinearOperator(ls)'
-    mat = __measurement_matrix(A, tmax, current_ops, alg; abstol, kwargs...)
-    mat = mat' * Matrix(initials.lmap)
+    _mat = __measurement_matrix(A, tmax, current_ops, alg; abstol, kwargs...)
+    mat = Matrix(initials.lmap)' * _mat
     return (; mat, current_ops, initials)
 end
 function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_krylovkit}; kwargs...)

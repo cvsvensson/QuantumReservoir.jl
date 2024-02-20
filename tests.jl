@@ -1,4 +1,5 @@
 lindbladian = DenseLindblad()
+tmax = 100
 ## test measurement_matrix
 @time mm1 = measurement_matrix(reservoir, qd_level_measurements, tmax, Exponentiation(); abstol, reltol, lindbladian);
 @time mm2 = measurement_matrix(reservoir, qd_level_measurements, tmax, Exponentiation(EXP_sciml()); abstol, reltol, lindbladian);
@@ -19,10 +20,10 @@ abstol = 1e-12
 [norm(sols1.integrated - sol.integrated) for sol in [sols2, sols3]] # ≈ [0.0, 0.0]
 
 ## compare measurement evolution and density matrix evolution
-inte = mapreduce(rho0 -> map(Base.Fix1(dot, rho0), eachrow(mm1.mat)), hcat, sols1.vecensembleI.rho0s) |> real
+inte = mapreduce(rho0 -> map(Base.Fix2(dot, rho0), eachcol(mm1.mat)), hcat, sols1.vecensembleI.rho0s) |> real
 sols1.integrated
 inte - sols1.integrated .|> abs |> maximum
 inte - sols2.integrated .|> abs |> maximum
 
-inte - sols1.integrated # systematic error for the current
+inte - sols1.integrated # 
 ##TODO: check commutativity of wedge product and initial state preparation
