@@ -48,7 +48,7 @@ struct ODE{A}
 end
 ODE() = ODE(DP8())
 IntegratedODE() = IntegratedODE(DP8())
-Exponentiation() = Exponentiation(EXP_krylovkit())
+Exponentiation() = Exponentiation(EXP_sciml())
 
 struct Reservoir{RC,H,LS,I,CO}
     rc::RC
@@ -201,28 +201,26 @@ function integrated_current(A, rho0s, tmax, get_current, alg::Exponentiation{EXP
     u0 = complex(zero(first(rho0s)))
     mapreduce(rho0 -> get_current(krylovkit_exponentiation(A, tmax, u0, rho0; kwargs...)), hcat, rho0s)
 end
-function integrated_current(A, rho0s, tmax, get_current, alg::Exponentiation{EXP_sciml}; kwargs...)
+function integrated_current(A, rho0s, tmax, get_current, alg::Exponentiation{EXP_sciml}; maxiter=100, kwargs...)
     n = size(A, 1)
     wa = zeros(ComplexF64, n, 2)
-    maxiter = 100
     ksA = KrylovSubspace{complex(eltype(A))}(n, maxiter)
     mapreduce(rho0 -> get_current(sciml_exponentiation(A, tmax, rho0, (wa, ksA); kwargs...)), hcat, rho0s)
 end
 
-function sciml_exponentiation(A, tmax, vrho0, (wa, ksA), m=50; abstol, kwargs...)
+function sciml_exponentiation(A, tmax, vrho0, (wa, ksA), m=100; abstol, kwargs...)
     count = 0
     arnoldi!(ksA, A, vrho0; tol=abstol, m)
-    sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
-    out = tmax * sol[:, 2]
+    sol, errest = phiv!(wa, tmax, ksA, 1; correct=true, errest=true)
     while errest > abstol && count < 10
+        @warn "phiv! not converged. Increasing krylovdim and maxiter" count m errest
         count += 1
         m = 2 * m
+        resize!(ksA, 2 * ksA.m)
         arnoldi!(ksA, A, vrho0; tol=abstol, m)
-        sol, errest = phiv!(wa, tmax, ksA, 1; errest=true)
-        out = tmax * sol[:, 2]
-        @warn count m errest
+        sol, errest = phiv!(wa, tmax, ksA, 1; correct=true, errest=true)
     end
-    out
+    tmax * sol[:, 2]
 end
 function krylovkit_exponentiation(A, tmax, u0, vrho0; abstol, krylovdim=50, maxiter=100, kwargs...)
     sol, info = expintegrator(A, tmax, u0, vrho0; tol=abstol, krylovdim, maxiter)
@@ -241,48 +239,60 @@ end
 function integrated_current(A, rho0s, tmax, get_current, _alg::ODE; int_alg, ensemblealg=EnsembleThreads(), kwargs...)
     tspan = (zero(tmax), tmax)
     alg = _alg.alg
-    # u0 = first(ens.rho0s)
-    # A = QuantumDots.LinearOperator(ls)
-    # prob = ODEProblem(A, u0, tspan)
-    # function prob_func(prob, i, repeat)
-    #     prob.u0 .= ens.rho0s[i]
-    #     prob
-    # end
-    # eprob = EnsembleProblem(prob;
-    #     output_func=(sol, i) -> (integrated_current(sol, tmax, current_ops; int_alg, kwargs...), false),
-    #     prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
-    #     reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
-    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
-    currents = Vector{Float64}[]
-    for rho0 in rho0s
-        prob = ODEProblem(A, rho0, tspan)
-        sol = solve(prob, alg; kwargs...)
-        solInt = integrate_current(sol, tmax, get_current; int_alg, kwargs...)
-        push!(currents, solInt.u)
+    u0 = first(rho0s)
+    prob = ODEProblem(A, u0, tspan)
+    function prob_func(prob, i, repeat)
+        prob.u0 .= rho0s[i]
+        prob
     end
-    reduce(hcat, currents)
+    eprob = EnsembleProblem(prob;
+        output_func=(sol, i) -> (integrate_current(sol, tmax, get_current; int_alg, kwargs...), false),
+        prob_func, u_init=Matrix{Float64}(undef, length(get_current(u0)), 0),
+        reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    solve(eprob, alg, ensemblealg; trajectories=length(rho0s), kwargs...).u
+
+    # currents = Vector{Float64}[]
+    # for rho0 in rho0s
+    #     prob = ODEProblem(A, rho0, tspan)
+    #     sol = solve(prob, alg; kwargs...)
+    #     solInt = integrate_current(sol, tmax, get_current; int_alg, kwargs...)
+    #     push!(currents, solInt.u)
+    # end
+    # reduce(hcat, currents)
 end
-function integrated_current(A, rho0s, tmax, get_current, _alg::IntegratedODE; ensemblealg=EnsembleThreads(), kwargs...)
+using SciMLOperators
+function integrated_current(A, rho0s, tmax, get_current, _alg::IntegratedODE; ensemblealg=EnsembleThreads(), int_alg=nothing, kwargs...)
     domain = (zero(tmax), tmax)
     alg = _alg.alg
     u0 = zero(complex(first(rho0s)))
     sols = []
-    for rho0 in rho0s
-        prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= rho0, u0, domain; kwargs...)
-        sol = solve(prob, alg; kwargs...)
-        push!(sols, get_current(sol(tmax)))
-    end
-    reduce(hcat, sols)
-    # function prob_func(prob, i, repeat)
-    #     prob.u0 .= vecrep(ens.rho0s[i], ls)
-    #     prob
+    get_f(rho0) = (v, u, p, t) -> (mul!(v, A, u); v .+= rho0)
+    prob = ODEProblem(get_f(first(rho0s)), u0, domain; kwargs...)
+    # for rho0 in rho0s
+    #     f = get_f(rho0)
+    #     # prob = ODEProblem(f, u0, domain; kwargs...)
+    #     prob = remake(prob; f)
+    #     # prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= rho0, u0, domain; kwargs...)
+    #     sol = solve(prob, alg; kwargs...)
+    #     push!(sols, get_current(sol(tmax)))
     # end
-    # eprob = EnsembleProblem(prob;
-    #     output_func=(sol, i) -> ([real(sol(tmax)' * op) for op in current_ops], false),
-    #     prob_func, u_init=Matrix{Float64}(undef, length(current_ops), 0),
-    #     reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    # reduce(hcat, sols)
 
-    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), kwargs...).u
+    # f = SplitFunction(A, (v, u, p, t) -> v .= first(rho0s))
+    # prob = SplitODEProblem(f, u0, domain; kwargs...)
+    # Af = AffineOperator(A, IdentityOperator(size(A, 2)), first(rho0s))
+    prob = ODEProblem(Af, u0, domain; kwargs...)
+    function prob_func(prob, i, repeat)
+        # prob.f.f.b .= rho0s[i]
+        f = get_f(rho0s[i])
+        prob = remake(prob; f)
+        prob
+    end
+    eprob = EnsembleProblem(prob;
+        output_func=(sol, i) -> (get_current(sol(tmax)), false),
+        prob_func, u_init=Matrix{Float64}(undef, length(get_current(u0)), 0),
+        reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    solve(eprob, alg, ensemblealg; trajectories=length(rho0s), kwargs...).u
 end
 function current_integrand(ts, A, vrho0, get_current; abstol, kwargs...)
     rhos = expv_timestep(ts, A, vrho0; tol=abstol, adaptive=true)

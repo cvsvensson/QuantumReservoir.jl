@@ -37,7 +37,7 @@ end
 μmin = -1e5
 μs = -1 .* [1, 1]
 T = 10
-Nres_layers = 0
+Nres_layers = 1
 Nres = 50
 rc = ReservoirConnections(Nres_layers, length(μs))
 Nleads = length(μs) # Make this more general. Labels to connect leads.
@@ -63,10 +63,14 @@ alg = DP8()
 alg = Exponentiation()
 lindbladian = DenseLindblad()
 ##
-reservoir = prepare_reservoir(rc, reservoir_parameters[1], (T, μs); abstol);
-mm = measurement_matrix(reservoir, tmax, alg; abstol)
-training_sols = run_reservoir_trajectories(reservoir, training_input_states[1:M_train], tmax, alg; time_trace=false, abstol)
-val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, alg; time_trace=false, abstol)
+@time reservoir = prepare_reservoir(rc, reservoir_parameters[1], (T, μs); abstol);
+@time mm = measurement_matrix(reservoir, tmax, alg; abstol);
+@time training_sols = run_reservoir_trajectories(reservoir, training_input_states[1:M_train], tmax, alg; time_trace=false, abstol);
+@time val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, Exponentiation(EXP_krylovkit()); time_trace=false, abstol);
+@time val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, Exponentiation(EXP_sciml()); time_trace=false, abstol);
+@benchmark val_sols1 = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, ODE(DP8()); int_alg, time_trace=false, ensemblealg = EnsembleThreads(), abstol);
+@benchmark val_sols2 = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, IntegratedODE(DP8()); int_alg, time_trace=false, ensemblealg = EnsembleThreads(), abstol)
+
 mm' * stack(map(rho -> vecrep(rho, reservoir), training_input_states[1:M_train])) - training_sols.integrated |> norm
 ##
 traj = run_reservoir_trajectories(reservoir, training_input_states[1:2], tmax, alg; time_trace=true, abstol)
@@ -109,10 +113,16 @@ plot!(map(d -> log(d.cond), data1[sp1]))
 proj = cat([0;;], one(rand(4, 4)), [0;;]; dims=(1, 2))[2:5, :]
 
 ##
-plot(map(d -> log(d.cond), data1[sp1]))
-plot!(map(d -> log(d.loss) + 8, data1[sp1]))
-plot!(map(d -> log(cond(proj * d.mm)) + 3, data1[sp1]))
-plot!(map(d -> log(1/minimum(svd(proj * d.mm).S)), data1[sp1]))
+subtract_mean!(x) = (x .-= mean(x); x)
+##
+# let data = data0[sp0]
+let data = data1[sp1]
+    plot(map(d -> log(d.loss), data) |> subtract_mean!, lw = 2, label="loss")
+    plot!(map(d -> log(d.cond), data) |> subtract_mean!, label="cond")
+    plot!(map(d -> -log(minimum(svd(d.mm).S)), data) |> subtract_mean!, label="min(svd(m))")
+    plot!(map(d -> log(cond(proj * d.mm)), data) |> subtract_mean!, label="cond(proj*m)", ls = :dash)
+    plot!(map(d -> -log(minimum(svd(proj * d.mm).S)), data) |> subtract_mean!, label="min(svd(proj*m))", ls = :dash)
+end
 ##
 let f = d -> log(cond(proj * d.mm))
     plot(map(f, data0[sp0]))
