@@ -281,7 +281,7 @@ function integrated_current(A, rho0s, tmax, get_current, _alg::IntegratedODE; en
     # f = SplitFunction(A, (v, u, p, t) -> v .= first(rho0s))
     # prob = SplitODEProblem(f, u0, domain; kwargs...)
     # Af = AffineOperator(A, IdentityOperator(size(A, 2)), first(rho0s))
-    prob = ODEProblem(Af, u0, domain; kwargs...)
+    # prob = ODEProblem(Af, u0, domain; kwargs...)
     function prob_func(prob, i, repeat)
         # prob.f.f.b .= rho0s[i]
         f = get_f(rho0s[i])
@@ -328,7 +328,7 @@ end
 
 function integrate_current(sol, tmax, get_currents; int_alg, kwargs...)
     outsol = sol(0.0)
-    function f(t, outsol)::Vector{Float64}
+    function f(t, outsol)#::Vector{Float64}
         get_currents(sol(outsol, t))
     end
     IntegralFunction(f)
@@ -362,32 +362,59 @@ function __measurement_matrix(A, tmax, current_ops, alg::Exponentiation{EXP_scim
     Ufull = exponential!(Abar * tmax)
     n = size(A, 1)
     U = Ufull[1:n, n+1:end]
-    mapreduce(Base.Fix1(*, U,), hcat, current_ops)
+    mapreduce(Base.Fix1(*, U), hcat, current_ops)
 end
 
 
-function __measurement_matrix(A, tmax, current_ops, alg::IntegratedODE; kwargs...)
-    sols = []
+function __measurement_matrix(A, tmax, current_ops, alg::IntegratedODE; ensemblealg=EnsembleThreads(), abstol, kwargs...)
     domain = (zero(tmax), tmax)
-    for op in current_ops
-        prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= op, zero(complex(op)), domain; kwargs...)
-        sol = solve(prob, alg.alg; kwargs...)
-        push!(sols, sol(tmax))
+
+    # sols = []
+    # for op in current_ops
+    #     prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= op, zero(complex(op)), domain; kwargs...)
+    #     sol = solve(prob, alg.alg; kwargs...)
+    #     push!(sols, sol(tmax))
+    # end
+    # reduce(hcat, sols)
+
+    u0 = zero(complex(first(current_ops)))
+    get_f(x) = (v, u, p, t) -> (mul!(v, A, u); v .+= x)
+    prob = ODEProblem(get_f(first(current_ops)), u0, domain; kwargs...)
+    function prob_func(prob, i, repeat)
+        f = get_f(current_ops[i])
+        prob = remake(prob; f)
+        prob
     end
-    reduce(hcat, sols)
+    eprob = EnsembleProblem(prob;
+        output_func=(sol, i) -> (sol(tmax), false),
+        prob_func, u_init=Matrix{Float64}(undef, length(u0), 0),
+        reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    solve(eprob, alg.alg, ensemblealg; abstol, trajectories=length(current_ops), kwargs...).u
 end
-function __measurement_matrix(A, tmax, current_ops, alg::ODE; int_alg, abstol, kwargs...)
-    sols = []
+function __measurement_matrix(A, tmax, current_ops, alg::ODE; int_alg, ensemblealg=EnsembleThreads(), abstol, kwargs...)
     domain = (zero(tmax), tmax)
-    for op in current_ops
-        prob = ODEProblem(A, complex(op), domain)
-        sol = solve(prob, alg.alg; abstol, kwargs...)
-        outsol = sol(0.0)
-        probInt = IntegralProblem((u, outsol) -> sol(outsol, u), domain, outsol)
-        solInt = solve(probInt, int_alg; abstol, kwargs...)
-        push!(sols, solInt)
+    # sols = []
+    # for op in current_ops
+    #     prob = ODEProblem(A, complex(op), domain)
+    #     sol = solve(prob, alg.alg; abstol, kwargs...)
+    #     outsol = sol(0.0)
+    #     probInt = IntegralProblem((u, outsol) -> sol(outsol, u), domain, outsol)
+    #     solInt = solve(probInt, int_alg; abstol, kwargs...)
+    #     push!(sols, solInt)
+    # end
+    # reduce(hcat, sols)
+
+    u0 = zero(complex(first(current_ops)))
+    prob = ODEProblem(A, u0, domain; kwargs...)
+    function prob_func(prob, i, repeat)
+        prob.u0 .= current_ops[i]
+        prob
     end
-    reduce(hcat, sols)
+    eprob = EnsembleProblem(prob;
+        output_func=(sol, i) -> (integrate_current(sol, tmax, identity; int_alg, kwargs...), false),
+        prob_func, u_init=Matrix{Float64}(undef, length(u0), 0),
+        reduction=(u, data, I) -> (hcat(u, reduce(hcat, data)), false))
+    solve(eprob, alg.alg, ensemblealg; abstol, trajectories=length(current_ops), kwargs...).u
 end
 
 using RandomMatrices

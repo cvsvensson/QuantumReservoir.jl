@@ -69,7 +69,7 @@ lindbladian = DenseLindblad()
 @time val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, Exponentiation(EXP_krylovkit()); time_trace=false, abstol);
 @time val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, Exponentiation(EXP_sciml()); time_trace=false, abstol);
 @benchmark val_sols1 = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, ODE(DP8()); int_alg, time_trace=false, ensemblealg = EnsembleThreads(), abstol);
-@benchmark val_sols2 = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, IntegratedODE(DP8()); int_alg, time_trace=false, ensemblealg = EnsembleThreads(), abstol)
+@time val_sols2 = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, IntegratedODE(DP8()); int_alg, time_trace=false, ensemblealg = EnsembleThreads(), abstol)
 
 mm' * stack(map(rho -> vecrep(rho, reservoir), training_input_states[1:M_train])) - training_sols.integrated |> norm
 ##
