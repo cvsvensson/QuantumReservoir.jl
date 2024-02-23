@@ -188,7 +188,7 @@ end
 # LinearOperatorRep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
 # LinearOperatorRep(rho, ::LazyLindbladSystem) = vec(rho)
 
-# vecrep(rho, ::LazyLindbladSystem) = vec(rho)
+vecrep(rho, ::LazyLindbladSystem) = vec(rho)
 vecrep(rho, ls::LindbladSystem) = QuantumDots.internal_rep(rho, ls)
 
 

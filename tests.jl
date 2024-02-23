@@ -1,4 +1,4 @@
-lindbladian = DenseLindblad()
+lindbladian = LazyLindblad()
 tmax = 100
 abstol = 1e-12
 reltol = 1e-12

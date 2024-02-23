@@ -109,7 +109,7 @@ function get_initial_state(rc::ReservoirConnections, (lsI, lsR, lsIR0, lsIR); ab
     # normalize_rho!(rhoI)
     # rhoIvec = vecrep(rhoI, lsI)
 
-    if length(lsR.total) > 1
+    if length(QuantumDots.LinearOperator(lsR)) > 1
         probR = StationaryStateProblem(lsR)
         rhointernalR = solve(probR, LinearSolve.KrylovJL_LSMR(); abstol, kwargs...)
         rhoR = QuantumDots.tomatrix(rhointernalR, lsR)
@@ -123,7 +123,9 @@ function get_initial_state(rc::ReservoirConnections, (lsI, lsR, lsIR0, lsIR); ab
     # rhoIR = wedge(rhoI, res.cI, rhoR, res.cR, res.c)
     # rhoIRvec = vecrep(rhoIR, lsIR)
     T = promote_type(eltype(lsI), eltype(lsIR))
-    lm = LinearMap{T}(rhoIvec -> vecrep(wedge(QuantumDots.tomatrix(rhoIvec, lsI), rc.bases.cI, rhoR, rc.bases.cR, rc.bases.cIR), lsIR), size(lsIR.total, 2), size(lsI.total, 2))
+    nout = size(QuantumDots.LinearOperator(lsIR), 2)
+    nin = size(QuantumDots.LinearOperator(lsI), 2)
+    lm = LinearMap{T}(rhoIvec -> vecrep(wedge(QuantumDots.tomatrix(rhoIvec, lsI), rc.bases.cI, rhoR, rc.bases.cR, rc.bases.cIR), lsIR), nout, nin)
 
     # probIR2 = StationaryStateProblem(lsIR2)
     # rhointernalIR2 = solve(probIR2, LinearSolve.KrylovJL_LSMR(); kwargs...)
@@ -212,7 +214,7 @@ function sciml_exponentiation(A, tmax, vrho0, (wa, ksA), m=100; abstol, kwargs..
     count = 0
     arnoldi!(ksA, A, vrho0; tol=abstol, m)
     sol, errest = phiv!(wa, tmax, ksA, 1; correct=true, errest=true)
-    while errest > abstol && count < 10
+    while errest > abstol && count < 2
         @warn "phiv! not converged. Increasing krylovdim and maxiter" count m errest
         count += 1
         m = 2 * m
