@@ -8,7 +8,7 @@ int_alg = GaussLegendre()
 ## test measurement_matrix
 @time mm1 = measurement_matrix(reservoir, tmax, Exponentiation(); abstol, reltol);
 @time mm2 = measurement_matrix(reservoir, tmax, Exponentiation(EXP_krylovkit()); abstol, reltol);
-@time mm3 = measurement_matrix(reservoir, tmax, ODE(); int_alg, abstol, reltol)
+@time mm3 = measurement_matrix(reservoir, tmax, ODE(); int_alg, abstol, reltol);
 @time mm4 = measurement_matrix(reservoir, tmax, IntegratedODE(); abstol, reltol);
 @time mm5 = measurement_matrix(reservoir, tmax, Exponentiation(EXP_sciml_full()); abstol, reltol);
 

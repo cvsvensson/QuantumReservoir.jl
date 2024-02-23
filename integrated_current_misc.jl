@@ -265,27 +265,10 @@ function integrated_current(A, rho0s, tmax, get_current, _alg::IntegratedODE; en
     domain = (zero(tmax), tmax)
     alg = _alg.alg
     u0 = zero(complex(first(rho0s)))
-    sols = []
-    get_f(rho0) = (v, u, p, t) -> (mul!(v, A, u); v .+= rho0)
-    prob = ODEProblem(get_f(first(rho0s)), u0, domain; kwargs...)
-    # for rho0 in rho0s
-    #     f = get_f(rho0)
-    #     # prob = ODEProblem(f, u0, domain; kwargs...)
-    #     prob = remake(prob; f)
-    #     # prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= rho0, u0, domain; kwargs...)
-    #     sol = solve(prob, alg; kwargs...)
-    #     push!(sols, get_current(sol(tmax)))
-    # end
-    # reduce(hcat, sols)
-
-    # f = SplitFunction(A, (v, u, p, t) -> v .= first(rho0s))
-    # prob = SplitODEProblem(f, u0, domain; kwargs...)
-    # Af = AffineOperator(A, IdentityOperator(size(A, 2)), first(rho0s))
-    # prob = ODEProblem(Af, u0, domain; kwargs...)
+    f = (v, u, p, t) -> (mul!(v, A, u); v .+= p)
+    prob = ODEProblem(f, u0, domain, first(rho0s); kwargs...)
     function prob_func(prob, i, repeat)
-        # prob.f.f.b .= rho0s[i]
-        f = get_f(rho0s[i])
-        prob = remake(prob; f)
+        prob = remake(prob, p=rho0s[i])
         prob
     end
     eprob = EnsembleProblem(prob;
@@ -301,20 +284,6 @@ end
 function get_current_time_trace(A, rho0s, tmax, get_current; alg=ROCK4(), ensemblealg=EnsembleThreads(), kwargs...)
     tspan = (zero(tmax), tmax)
     ts = range(first(tspan), last(tspan), 200)
-    # u0 = first(rho0s)
-    # A = QuantumDots.LinearOperator(ls)
-
-    #Something wrong with threading for the ensemble? Every solution is the same. 
-    # prob = ODEProblem(A, u0, tspan)
-    # function prob_func(prob, i, repeat)
-    #     prob.u0 .= vecrep(ens.rho0s[i], ls)
-    #     prob
-    # end
-    # eprob = EnsembleProblem(prob;
-    #     output_func=(sol, i) -> ([real(tr(sol(t)' * op)) for t in ts, op in current_ops], false),
-    #     reduction=(u, data, I) -> (append!(u, data), false))
-    # solve(eprob, alg, ensemblealg; trajectories=length(ens.rho0s), abstol, kwargs...)
-    # get_currents = Base.Fix2(calculate_currents, op)
     currents = Matrix{Float64}[]
     for rho0 in rho0s
         u0 = rho0
@@ -368,23 +337,14 @@ end
 
 function __measurement_matrix(A, tmax, current_ops, alg::IntegratedODE; ensemblealg=EnsembleThreads(), abstol, kwargs...)
     domain = (zero(tmax), tmax)
-
-    # sols = []
-    # for op in current_ops
-    #     prob = SplitODEProblem{true}(A, (v, u, p, t) -> v .= op, zero(complex(op)), domain; kwargs...)
-    #     sol = solve(prob, alg.alg; kwargs...)
-    #     push!(sols, sol(tmax))
-    # end
-    # reduce(hcat, sols)
-
     u0 = zero(complex(first(current_ops)))
-    get_f(x) = (v, u, p, t) -> (mul!(v, A, u); v .+= x)
-    prob = ODEProblem(get_f(first(current_ops)), u0, domain; kwargs...)
+    f = (v, u, p, t) -> (mul!(v, A, u); v .+= p)
+    prob = ODEProblem(f, u0, domain, first(current_ops); kwargs...)
     function prob_func(prob, i, repeat)
-        f = get_f(current_ops[i])
-        prob = remake(prob; f)
+        prob = remake(prob, p=current_ops[i])
         prob
     end
+
     eprob = EnsembleProblem(prob;
         output_func=(sol, i) -> (sol(tmax), false),
         prob_func, u_init=Matrix{Float64}(undef, length(u0), 0),
@@ -393,17 +353,6 @@ function __measurement_matrix(A, tmax, current_ops, alg::IntegratedODE; ensemble
 end
 function __measurement_matrix(A, tmax, current_ops, alg::ODE; int_alg, ensemblealg=EnsembleThreads(), abstol, kwargs...)
     domain = (zero(tmax), tmax)
-    # sols = []
-    # for op in current_ops
-    #     prob = ODEProblem(A, complex(op), domain)
-    #     sol = solve(prob, alg.alg; abstol, kwargs...)
-    #     outsol = sol(0.0)
-    #     probInt = IntegralProblem((u, outsol) -> sol(outsol, u), domain, outsol)
-    #     solInt = solve(probInt, int_alg; abstol, kwargs...)
-    #     push!(sols, solInt)
-    # end
-    # reduce(hcat, sols)
-
     u0 = zero(complex(first(current_ops)))
     prob = ODEProblem(A, u0, domain; kwargs...)
     function prob_func(prob, i, repeat)
