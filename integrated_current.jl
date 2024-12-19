@@ -1,12 +1,11 @@
 using QuantumDots, QuantumDots.BlockDiagonals, LinearAlgebra
-using LinearAlgebra
 using Plots
 using LinearSolve
-using ExponentialUtilities
+using OrdinaryDiffEqHighOrderRK
 using MLJLinearModels
-using OrdinaryDiffEq
+using ExponentialUtilities
 using Statistics
-using Folds
+# using Folds
 using Random
 using LinearMaps
 using Integrals, FastGaussQuadrature
@@ -61,6 +60,7 @@ alg = DP8()
 alg = Exponentiation()
 lindbladian = DenseLindblad()
 ##
+
 @time reservoir = prepare_reservoir(rc, reservoir_parameters[1], (T, μs); abstol);
 @time mm = measurement_matrix(reservoir, tmax, alg; abstol);
 @time training_sols = run_reservoir_trajectories(reservoir, training_input_states[1:M_train], tmax, alg; time_trace=false, abstol);

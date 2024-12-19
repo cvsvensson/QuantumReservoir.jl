@@ -125,7 +125,7 @@ function get_initial_state(rc::ReservoirConnections, (lsI, lsR, lsIR0, lsIR); ab
     T = promote_type(eltype(lsI), eltype(lsIR))
     nout = size(QuantumDots.LinearOperator(lsIR), 2)
     nin = size(QuantumDots.LinearOperator(lsI), 2)
-    lm = LinearMap{T}(rhoIvec -> vecrep(wedge(QuantumDots.tomatrix(rhoIvec, lsI), rc.bases.cI, rhoR, rc.bases.cR, rc.bases.cIR), lsIR), nout, nin)
+    lm = LinearMap{T}(rhoIvec -> vecrep(wedge([QuantumDots.tomatrix(rhoIvec, lsI), rhoR], [rc.bases.cI, rc.bases.cR], rc.bases.cIR), lsIR), nout, nin)
 
     # probIR2 = StationaryStateProblem(lsIR2)
     # rhointernalIR2 = solve(probIR2, LinearSolve.KrylovJL_LSMR(); kwargs...)
