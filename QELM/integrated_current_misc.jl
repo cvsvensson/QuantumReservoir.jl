@@ -1,34 +1,5 @@
 struct DenseLindblad end
 struct LazyLindblad end
-struct ReservoirConnections{L,C,Cl,B}
-    labels::L
-    Ilabels::L
-    Ihalflabels::L
-    Rlabels::L
-    hopping_labels::C
-    Iconnections::C
-    Rconnections::C
-    IRconnections::C
-    lead_connections::Cl
-    bases::B
-end
-function ReservoirConnections(N, M=1; qn=QuantumDots.fermionnumber)
-    labels = vec(Base.product(0:N, 1:2) |> collect)
-    hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2 && is_nearest_neighbours(labels[k1], labels[k2])]
-    Ilabels = filter(x -> first(x) <= 0, labels)
-    Rlabels = filter(x -> first(x) > 0, labels)
-    Ihalflabels = filter(x -> isone(x[2]), Ilabels)
-    Iconnections = filter(k -> first(k[1]) + first(k[2]) == 0, hopping_labels)
-    Rconnections = filter(k -> first(k[1]) + first(k[2]) > 1, hopping_labels)
-    IRconnections = filter(k -> abs(first(k[1]) - first(k[2])) == 1, hopping_labels)
-    lead_connections = [(m, [(N, k) for k in 1:2]) for m in 1:M]
-
-    cI = FermionBasis(Ilabels; qn)
-    cR = FermionBasis(Rlabels; qn)
-    cIR = wedge(cI, cR)
-
-    return ReservoirConnections(labels, Ilabels, Ihalflabels, Rlabels, hopping_labels, Iconnections, Rconnections, IRconnections, lead_connections, (; cI, cR, cIR))
-end
 
 
 struct Sampled{G}
