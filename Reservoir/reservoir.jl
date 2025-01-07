@@ -6,7 +6,7 @@ using LinearSolve
 Random.seed!(1234)
 include("..\\system.jl")
 ##
-N = 2
+N = 4
 labels = 1:N
 qn = FermionConservation()
 c = FermionBasis(labels; qn)
@@ -26,7 +26,7 @@ H = Ht + HV + Hqd
 # H = blockdiagonal(Matrix.(blocks(H)), c)
 ##
 μmin = -1e5
-μs0 = zeros(4)#[μmin, μmin]#rand(2)
+μs0 = zeros(N)#[μmin, μmin]#rand(2)
 T = 10norm(Γ)
 leads = NamedTuple(Symbol(:l, l) => NormalLead(c[l]' * Γ[l]; T, μ=μs0[l]) for l in labels)
 @time ls = LindbladSystem(H, leads; usecache=true);
@@ -62,21 +62,33 @@ VoltageWrapper = VoltageWrapper1
 (v::VoltageWrapper)(t) = voltage_input(v.input(t), v.labels)
 (c::ContinuousInput)(t) = c.input(t)
 
-function odeproblem(_ls::LindbladSystem, input::ContinuousInput, tspan)
-    ls = deepcopy(_ls)
+function stationary_state(ls::LazyLindbladSystem; kwargs...)
     ss_prob = StationaryStateProblem(ls)
-    rho0 = solve(ss_prob; abstol=1e-12)
-    p = (ls, input, ls.cache)
+    reshape(solve(ss_prob; abstol=get(kwargs, :abstol, 1e-12)), size(ls.hamiltonian))
+end
+function stationary_state(ls::LindbladSystem; kwargs...)
+    ss_prob = StationaryStateProblem(ls)
+    solve(ss_prob; abstol=get(kwargs, :abstol, 1e-12))
+end
+function odeproblem(_ls, input::ContinuousInput, tspan)
+    ls = deepcopy(_ls)
+    rho0 = collect(stationary_state(ls))
+    p = (ls, input)
     ODEProblem(f_ode!, rho0, tspan, p)
 end
-function f_ode!(du, u, (ls, input, cache), t)
-    QuantumDots.update_lindblad_system!(ls, input(t), cache)
-    mul!(du, ls.total, u)
+function f_ode!(du, u, (ls, input), t)
+    QuantumDots.update_coefficients!(ls, input(t))
+    mul!(du, ls, u)
 end
 ##
-ls_kron = LindbladSystem(H, leads, QuantumDots.KronVectorizer(size(H,1)); usecache=true);
+ls_kron = LindbladSystem(H, leads, QuantumDots.KronVectorizer(size(H, 1)); usecache=true);
 ls = LindbladSystem(H, leads; usecache=true);
+ls_lazy = LazyLindbladSystem(H, leads);
 input = ContinuousInput(VoltageWrapper(t -> sin(t) .* (1:N), 1:N));
-@time sol = solve(odeproblem(ls, input, (0, 10_000)), Tsit5());#, abstol=1e-4, reltol=1e-4);
-@time sol_kron = solve(odeproblem(ls_kron, input, (0, 10_000)), Tsit5());#, abstol=1e-4, reltol=1e-4);
-@profview solve(odeproblem(ls, input, (0, 10000)), Tsit5());
+T = 100
+ode_kwargs = (; abstol=1e-6, reltol=1e-6)
+@time sol = solve(odeproblem(ls, input, (0, T)), Tsit5(); ode_kwargs...);
+@time sol_lazy = solve(odeproblem(ls_lazy, input, (0, T)), Tsit5(); ode_kwargs...);
+#@time sol_kron = solve(odeproblem(ls_kron, input, (0, 100)), Tsit5());#, abstol=1e-4, reltol=1e-4);
+@profview solve(odeproblem(ls, input, (0, T)), Tsit5());
+@profview solve(odeproblem(ls_lazy, input, (0, 10T)), Tsit5());
