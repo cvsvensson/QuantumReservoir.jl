@@ -18,6 +18,7 @@ V = Dict((k1, k2) => rand() for (k1, k2) in hopping_labels) # random_hoppings(ho
 ε = Dict(l => rand() - 0.5 for l in labels)
 Γ = rand(N)
 ##
+number_operator = sum([c[l]'c[l] for l in labels])
 Ht = hopping_hamiltonian(c, J; labels=hopping_labels)
 HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
 Hqd = qd_level_hamiltonian(c, ε)
@@ -28,7 +29,7 @@ H = Ht + HV + Hqd
 μmin = -1e5
 μs0 = zeros(N)#[μmin, μmin]#rand(2)
 T = 10norm(Γ)
-leads = NamedTuple(Symbol(:l, l) => NormalLead(c[l]' * Γ[l]; T, μ=μs0[l]) for l in labels)
+leads = Dict(l => NormalLead(c[l]' * Γ[l]; T, μ=μs0[l]) for l in labels)
 @time ls = LindbladSystem(H, leads; usecache=true);
 
 ##
@@ -52,7 +53,8 @@ end
 ##
 
 function voltage_input(input, labels)
-    NamedTuple(map((l, v) -> Symbol(:l, l) => (; μ=v), labels, input))
+    # OrderedDict(map((l,v) zip(labels, input))
+    Dict(map((l, v) -> l => (; μ=v), labels, input))
 end
 struct VoltageWrapper1{I,L}
     input::I
@@ -70,11 +72,10 @@ function stationary_state(ls::LindbladSystem; kwargs...)
     ss_prob = StationaryStateProblem(ls)
     solve(ss_prob; abstol=get(kwargs, :abstol, 1e-12))
 end
-function odeproblem(_ls, input::ContinuousInput, tspan)
+function odeproblem(_ls, input::ContinuousInput, tspan, initial_state=collect(stationary_state(_ls)))
     ls = deepcopy(_ls)
-    rho0 = collect(stationary_state(ls))
     p = (ls, input)
-    ODEProblem(f_ode!, rho0, tspan, p)
+    ODEProblem(f_ode!, initial_state, tspan, p)
 end
 function f_ode!(du, u, (ls, input), t)
     QuantumDots.update_coefficients!(ls, input(t))
@@ -92,3 +93,58 @@ ode_kwargs = (; abstol=1e-6, reltol=1e-6)
 #@time sol_kron = solve(odeproblem(ls_kron, input, (0, 100)), Tsit5());#, abstol=1e-4, reltol=1e-4);
 @profview solve(odeproblem(ls, input, (0, T)), Tsit5());
 @profview solve(odeproblem(ls_lazy, input, (0, 10T)), Tsit5());
+
+##measure(rho, op, ls::AbstractOpenSystem) 
+mutable struct Res4{L,I,T}
+    ls0::L
+    ls::L
+    input::I
+    tspan::T
+    initial_state
+    sol
+end
+Res = Res4
+_Res(ls, input, tspan) = Res(ls, deepcopy(ls), input, tspan, nothing, nothing)
+_Res(ls, input, tspan, initial_state) = Res(ls, deepcopy(ls), input, tspan, initial_state, nothing)
+function stationary_state!(res::Res; kwargs...)
+    res.initial_state = collect(stationary_state(res.ls0; kwargs...))
+end
+default_initial_state(res::Res) = default_initial_state(res.ls)#stationary_state!(res)
+function default_initial_state(ls::LazyLindbladSystem)
+    Matrix{eltype(ls)}(I, size(ls.hamiltonian))
+end
+function default_initial_state(ls::LindbladSystem)
+    ls.vectorizer.idvec
+end
+function SciMLBase.solve!(res::Res, initial_state=res.initial_state; kwargs...)
+    if isnothing(res.initial_state)
+        res.initial_state = default_initial_state(res)
+    end
+    res.sol = solve(odeproblem(res.ls, res.input, res.tspan, res.initial_state), Tsit5(); kwargs...)
+end
+get_currents(res::Res, t, op=number_operator) = get_currents(res.sol, res.ls, res.input, t, op)
+
+function get_currents(sol, ls, input, t, op=number_operator)
+    rho = sol(t)
+    QuantumDots.update_coefficients!(ls, input(t))
+    get_currents(rho, ls, op)
+end
+function get_currents(rho, ls, op=number_operator)
+    real(QuantumDots.measure(rho, op, ls))
+end
+##
+res = _Res(ls_lazy, input, (0, T));
+sol = solve!(res; callback);
+using BenchmarkTools
+@btime solve!($res);
+solve!(res)
+cu = get_currents(res, 0.0)
+cu2 = get_currents(res, 0.0)
+@btime get_currents($res, $(0.0));
+@profview foreach(t -> get_currents(res, t), range(0, T, 10000));
+@profview_allocs foreach(t -> get_currents(res, t), range(0, T, 10000));
+@time [get_currents(res, t) for t in range(0, T, 1000)];
+##
+@profview_allocs foreach(j -> solve!(res), 1:10);
+
+##
