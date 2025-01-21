@@ -1,5 +1,5 @@
-using QuantumDots
-using QuantumDots.BlockDiagonals
+using QuantumDots, QuantumDots.BlockDiagonals
+using LinearAlgebra
 using Random
 using OrdinaryDiffEqTsit5
 using LinearSolve
@@ -28,8 +28,8 @@ H = Ht + HV + Hqd
 ##
 μmin = -1e5
 μs0 = zeros(N)#[μmin, μmin]#rand(2)
-T = 10norm(Γ)
-leads = Dict(l => NormalLead(c[l]' * Γ[l]; T, μ=μs0[l]) for l in labels)
+temperature = 2norm(Γ)
+leads = Dict(l => NormalLead(c[l]' * Γ[l]; T=temperature, μ=μs0[l]) for l in labels)
 @time ls = LindbladSystem(H, leads; usecache=true);
 
 ##
@@ -51,17 +51,20 @@ end
 #     delay::D
 # end
 ##
-
-function voltage_input(input, labels)
-    # OrderedDict(map((l,v) zip(labels, input))
-    Dict(map((l, v) -> l => (; μ=v), labels, input))
+struct MaskedInput{M,S}
+    mask::M
+    signal::S
 end
-struct VoltageWrapper1{I,L}
-    input::I
-    labels::L
+(m::MaskedInput)(t) = Dict(l => m.signal(t) * v for (l, v) in pairs(m.mask))
+function voltage_input(signal)
+    Dict(l => (; μ=v) for (l, v) in pairs(signal))
+    # Dict(map((l, v) -> l => (; μ=v), labels, input))
 end
-VoltageWrapper = VoltageWrapper1
-(v::VoltageWrapper)(t) = voltage_input(v.input(t), v.labels)
+struct VoltageWrapper2{S}
+    signal::S
+end
+VoltageWrapper = VoltageWrapper2
+(v::VoltageWrapper)(t) = voltage_input(v.signal(t))
 (c::ContinuousInput)(t) = c.input(t)
 
 function stationary_state(ls::LazyLindbladSystem; kwargs...)
@@ -85,7 +88,8 @@ end
 ls_kron = LindbladSystem(H, leads, QuantumDots.KronVectorizer(size(H, 1)); usecache=true);
 ls = LindbladSystem(H, leads; usecache=true);
 ls_lazy = LazyLindbladSystem(H, leads);
-input = ContinuousInput(VoltageWrapper(t -> sin(t) .* (1:N), 1:N));
+mask = Dict(l => l for l in keys(leads))
+input = ContinuousInput(VoltageWrapper(MaskedInput(mask, sin)));
 T = 100
 ode_kwargs = (; abstol=1e-6, reltol=1e-6)
 @time sol = solve(odeproblem(ls, input, (0, T)), Tsit5(); ode_kwargs...);
@@ -114,7 +118,7 @@ function default_initial_state(ls::LazyLindbladSystem)
     Matrix{eltype(ls)}(I, size(ls.hamiltonian))
 end
 function default_initial_state(ls::LindbladSystem)
-    ls.vectorizer.idvec
+    complex(ls.vectorizer.idvec)
 end
 function SciMLBase.solve!(res::Res, initial_state=res.initial_state; kwargs...)
     if isnothing(res.initial_state)
@@ -129,18 +133,26 @@ function get_currents(sol, ls, input, t, op=number_operator)
     QuantumDots.update_coefficients!(ls, input(t))
     get_currents(rho, ls, op)
 end
+function get_spectrum(ls, input, t)
+    QuantumDots.update_coefficients!(ls, input(t))
+    eigvals(Matrix(ls))
+end
 function get_currents(rho, ls, op=number_operator)
     real(QuantumDots.measure(rho, op, ls))
 end
 ##
 res = _Res(ls_lazy, input, (0, T));
-sol = solve!(res; callback);
+res_dense = _Res(ls, input, (0, T));
+sol = solve!(res);
+solve!(res_dense);
 using BenchmarkTools
 @btime solve!($res);
+@btime solve!($res_dense);
 solve!(res)
 cu = get_currents(res, 0.0)
 cu2 = get_currents(res, 0.0)
 @btime get_currents($res, $(0.0));
+@btime get_currents($res_dense, $(0.0));
 @profview foreach(t -> get_currents(res, t), range(0, T, 10000));
 @profview_allocs foreach(t -> get_currents(res, t), range(0, T, 10000));
 @time [get_currents(res, t) for t in range(0, T, 1000)];
@@ -148,3 +160,61 @@ cu2 = get_currents(res, 0.0)
 @profview_allocs foreach(j -> solve!(res), 1:10);
 
 ##
+J = Dict((k1, k2) => 2(rand() - 0.5) for (k1, k2) in hopping_labels)
+V = Dict((k1, k2) => rand() for (k1, k2) in hopping_labels)
+ε = Dict(l => rand() - 0.5 for l in labels)
+Γ = rand(N)
+Ht = hopping_hamiltonian(c, J; labels=hopping_labels)
+HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
+Hqd = qd_level_hamiltonian(c, ε)
+H = Ht + HV + Hqd
+temperature = 10norm(Γ)
+leads = Dict(l => NormalLead(c[l]' * Γ[l]; T=temperature, μ=μs0[l]) for l in labels)
+result = let H = H, leads = leads, signal = sin, T = 50, t_measures = range(0, T, 100)
+    tspan = (0, T)
+    ls = LindbladSystem(H, leads; usecache=true)
+    lazyls = LazyLindbladSystem(H, leads)
+    mask = Dict(l => l^2 * 10 * rand() for l in keys(leads))
+    input = ContinuousInput(VoltageWrapper(MaskedInput(mask, sin)))
+    ode_kwargs = (; abstol=1e-6, reltol=1e-6)
+    # sol = solve(odeproblem(ls, input, (0, T)), Tsit5(); ode_kwargs...)
+    sol_lazy = solve(odeproblem(ls_lazy, input, tspan), Tsit5(); ode_kwargs...)
+    t_measures = range(tspan..., 100)
+
+    currents = [get_currents(sol_lazy, ls_lazy, input, t, number_operator) for t in t_measures]
+    spectrum = [get_spectrum(ls, input, t) for t in t_measures]
+    (; spectrum, currents, sol=sol_lazy, ts=t_measures, T, input, H)
+end;
+## Training a linear layer to predict the target given the current
+using MLJLinearModels
+target = sin
+n_train = 10:80
+n_test = 81:length(result.ts)
+Xtrain = stack(result.currents[n_train])
+ytrain = transpose(target.(result.ts[n_train]))
+Xtest = stack(result.currents[n_test])
+ytest = transpose(target.(result.ts[n_test]))
+ridge = RidgeRegression(1e-6; fit_intercept=true)
+W = reduce(hcat, map(data -> fit(ridge, Xtrain', data), eachrow(ytrain))) |> permutedims
+ztrain = W[:, 1:end-1] * Xtrain .+ W[:, end]
+ztest = W[:, 1:end-1] * Xtest .+ W[:, end]
+##
+xlims = maximum(abs ∘ real, first(result.spectrum)) .* (-1.01, 0.01)
+ylims = maximum(abs ∘ imag, first(result.spectrum)) .* (-1.01, 1.01)
+ediffs = QuantumDots.commutator(Diagonal(eigvals(Matrix(H)))).diag
+leadlabels = transpose(collect(keys(result.input(0))))
+signal = stack([collect(values(result.input.input.signal(t))) for t in result.ts])'
+pcurrent = plot(result.ts, stack(result.currents)', label=leadlabels, legendtitle="Lead", xlabel="t", ylabel="current")
+ptarget = plot(result.ts, target.(result.ts), label="target", xlabel="t", ylabel="target")
+plot!(ptarget, result.ts[n_train], ztrain', label="train")
+plot!(ptarget, result.ts[n_test], ztest', label="test")
+anim = @animate for (s, t) in zip(result.spectrum, result.ts)
+    p1 = scatter(real(s), imag(s); xlims, ylims, size=(800, 800))
+    input = result.input
+    boltz = stack([QuantumDots.fermidirac.(ediffs, leads[l].T, input(t)[l].μ) |> sort for l in keys(leads)])
+    psignal = plot(result.ts, signal, labels=leadlabels, xlabel="t", ylabel="voltage", legendtitle="Lead")
+    vline!(psignal, [t], color=:red, label="t")
+    pboltz = plot(boltz, marker=true, ylims=(0, 1), labels=leadlabels)
+    plot(p1, psignal, pboltz, pcurrent, ptarget, layout=(3, 2))
+end
+gif(anim, "anim_fps15.gif", fps=15)
