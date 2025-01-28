@@ -1,4 +1,4 @@
-struct Narma{N,P}
+struct Narma{I,P}
     input::I
     params::P
 end

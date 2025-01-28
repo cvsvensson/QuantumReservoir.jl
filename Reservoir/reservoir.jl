@@ -6,7 +6,9 @@ using LinearSolve
 using Plots
 using Statistics
 using MLJLinearModels
-
+using ExponentialUtilities
+using KrylovKit
+using UnPack
 Random.seed!(1234)
 include("..\\system.jl")
 ##
@@ -17,35 +19,13 @@ c = FermionBasis(labels; qn)
 number_operator = sum([c[l]'c[l] for l in labels])
 hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2] #&& is_nearest_neighbours(labels[k1], labels[k2])]
 ##
-# J = Dict((k1, k2) => 2(rand() - 0.5) for (k1, k2) in hopping_labels) # random_hoppings(hopping_labels)
-# # J = Dict((k1, k2) => rand() * exp(2pi * 1im * rand()) for (k1, k2) in hopping_labels) # random_hoppings(hopping_labels)
-# V = Dict((k1, k2) => rand() for (k1, k2) in hopping_labels) # random_hoppings(hopping_labels, 10)
-# ε = Dict(l => rand() - 0.5 for l in labels)
-# Γ = rand(N)
-# ##
-# number_operator = sum([c[l]'c[l] for l in labels])
-# Ht = hopping_hamiltonian(c, J; labels=hopping_labels)
-# HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
-# Hqd = qd_level_hamiltonian(c, ε)
-# ##
-# H = Ht + HV + Hqd
-# # H = blockdiagonal(Matrix.(blocks(H)), c)
-# ##
-# μmin = -1e5
-# μs0 = zeros(N)#[μmin, μmin]#rand(2)
-# temperature = 2norm(Γ)
-# leads = Dict(l => NormalLead(c[l]' * Γ[l]; T=temperature, μ=μs0[l]) for l in labels)
-# @time ls = LindbladSystem(H, leads; usecache=true);
-
-##
-
 struct ContinuousInput{I}
     input::I
 end
-# struct DiscreteInput{I,T}
-#     input::I
-#     dt::T
-# end
+struct DiscreteInput{I,T}
+    input::I
+    dt::T
+end
 # struct ReservoirTask1{I,T}
 #     input::I
 #     target::T
@@ -61,16 +41,18 @@ struct MaskedInput{M,S}
     signal::S
 end
 (m::MaskedInput)(t) = Dict(l => m.signal(t) * v for (l, v) in pairs(m.mask))
+Base.getindex(m::MaskedInput, i) = Dict(l => getindex(m.signal, i) * v for (l, v) in pairs(m.mask))
 function voltage_input(signal)
     Dict(l => (; μ=v) for (l, v) in pairs(signal))
     # Dict(map((l, v) -> l => (; μ=v), labels, input))
 end
-struct VoltageWrapper2{S}
+struct VoltageWrapper{S}
     signal::S
 end
-VoltageWrapper = VoltageWrapper2
 (v::VoltageWrapper)(t) = voltage_input(v.signal(t))
+Base.getindex(v::VoltageWrapper, l) = voltage_input(getindex(v.signal, l))
 (c::ContinuousInput)(t) = c.input(t)
+(d::DiscreteInput)(t) = d.input[1+Int(div(t, d.dt))]
 
 function stationary_state(ls::LazyLindbladSystem; kwargs...)
     ss_prob = StationaryStateProblem(ls)
@@ -80,61 +62,31 @@ function stationary_state(ls::LindbladSystem; kwargs...)
     ss_prob = StationaryStateProblem(ls)
     solve(ss_prob; abstol=get(kwargs, :abstol, 1e-12))
 end
-function odeproblem(_ls, input::ContinuousInput, tspan, initial_state=collect(stationary_state(_ls)))
+function odeproblem(_ls, input, tspan; kwargs...)
     ls = deepcopy(_ls)
+    QuantumDots.update_coefficients!(ls, input(tspan[1]))
+    initial_state = collect(stationary_state(ls))
+    odeproblem(ls, input, tspan, initial_state; copy=false, kwargs...)
+end
+function odeproblem(_ls, input::ContinuousInput, tspan, initial_state; copy=true, kwargs...)
+    ls = copy ? deepcopy(_ls) : _ls
     p = (ls, input)
-    ODEProblem(f_ode!, initial_state, tspan, p)
+    ODEProblem(f_ode!, initial_state, tspan, p; kwargs...)
 end
 function f_ode!(du, u, (ls, input), t)
     QuantumDots.update_coefficients!(ls, input(t))
     mul!(du, ls, u)
 end
 ##
-# ls_kron = LindbladSystem(H, leads, QuantumDots.KronVectorizer(size(H, 1)); usecache=true);
-# ls = LindbladSystem(H, leads; usecache=true);
-# ls_lazy = LazyLindbladSystem(H, leads);
-# mask = Dict(l => l for l in keys(leads))
-# input = ContinuousInput(VoltageWrapper(MaskedInput(mask, sin)));
-# T = 100
-# ode_kwargs = (; abstol=1e-6, reltol=1e-6)
-# @time sol = solve(odeproblem(ls, input, (0, T)), Tsit5(); ode_kwargs...);
-# @time sol_lazy = solve(odeproblem(ls_lazy, input, (0, T)), Tsit5(); ode_kwargs...);
-#@time sol_kron = solve(odeproblem(ls_kron, input, (0, 100)), Tsit5());#, abstol=1e-4, reltol=1e-4);
-# @profview solve(odeproblem(ls, input, (0, T)), Tsit5());
-# @profview solve(odeproblem(ls_lazy, input, (0, 10T)), Tsit5());
 
-##measure(rho, op, ls::AbstractOpenSystem) 
-# mutable struct Res4{L,I,T}
-#     ls0::L
-#     ls::L
-#     input::I
-#     tspan::T
-#     initial_state
-#     sol
-# end
-# Res = Res4
-# _Res(ls, input, tspan) = Res(ls, deepcopy(ls), input, tspan, nothing, nothing)
-# _Res(ls, input, tspan, initial_state) = Res(ls, deepcopy(ls), input, tspan, initial_state, nothing)
-# function stationary_state!(res::Res; kwargs...)
-#     res.initial_state = collect(stationary_state(res.ls0; kwargs...))
-# end
-# default_initial_state(res::Res) = default_initial_state(res.ls)#stationary_state!(res)
-# function default_initial_state(ls::LazyLindbladSystem)
-#     Matrix{eltype(ls)}(I, size(ls.hamiltonian))
-# end
-# function default_initial_state(ls::LindbladSystem)
-#     complex(ls.vectorizer.idvec)
-# end
-# function SciMLBase.solve!(res::Res, initial_state=res.initial_state; kwargs...)
-#     if isnothing(res.initial_state)
-#         res.initial_state = default_initial_state(res)
-#     end
-#     res.sol = solve(odeproblem(res.ls, res.input, res.tspan, res.initial_state), Tsit5(); kwargs...)
-# end
-# get_currents(res::Res, t, op=number_operator) = get_currents(res.sol, res.ls, res.input, t, op)
-
-function get_currents(sol, ls, input, t, op=number_operator)
+function get_currents(sol, ls, input::ContinuousInput, t, op=number_operator)
     rho = sol(t)
+    QuantumDots.update_coefficients!(ls, input(t))
+    get_currents(rho, ls, op)
+end
+function get_currents(sol, ls, input::DiscreteInput, t, op=number_operator)
+    n = 1 + Int(div(t, input.dt))
+    rho = sol[n]
     QuantumDots.update_coefficients!(ls, input(t))
     get_currents(rho, ls, op)
 end
@@ -165,11 +117,6 @@ function fully_connected_hopping(labels)
     [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2]
 end
 function rand_reservoir_params(fermionlabels, leadlabels=fermionlabels, hopping_labels=fully_connected_hopping(fermionlabels); Jscale=1, Vscale=1, Γscale=1, εscale=1, Γmin=0.1)
-    # J = Dict((k1, k2) => 2(rand() - 0.5) for (k1, k2) in hopping_labels)
-    # V = Dict((k1, k2) => rand() for (k1, k2) in hopping_labels)
-    # ε = Dict(l => rand() - 0.5 for l in fermionlabels)
-    # Γ = Dict(l => rand() + 0.1 for l in leadlabels)#0.5 * ones(length(leadlabels))
-    ## same as above but with scalings
     J = Dict((k1, k2) => Jscale * 2(rand() - 0.5) for (k1, k2) in hopping_labels)
     V = Dict((k1, k2) => Vscale * rand() for (k1, k2) in hopping_labels)
     ε = Dict(l => εscale * (rand() - 0.5) for l in fermionlabels)
@@ -226,7 +173,7 @@ for seed in 1:1
     Random.seed!(seed)
     tfinal = 50
     tspan = (0, tfinal)
-    N = 1000
+    N = 100
     ts = range(tspan..., N)
 
     signal = sin
@@ -277,3 +224,108 @@ summary_gif(results[1])
 ##
 evals = stack([eigvals(Matrix(hamiltonian(rand_reservoir_params(labels, Vscale=2)))) for _ in 1:10]);
 plot(evals, markers=true)
+
+## try discrete task
+includet("narma.jl")
+anims = []
+results = []
+# for seed in 1:1
+seed = 3
+Random.seed!(seed)
+tfinal = 50
+tspan = (0, tfinal)
+N = 10
+ts = range(tspan..., N + 1)[1:end-1]
+dt = tfinal / N
+signal = [sin(t / 10) for t in ts]
+targets = narma(5, default_narma_parameters, signal)#[sin, (x -> sin(x - 1)), x -> sin(x - 1)^2]
+targetnames = ["narma"]
+params = rand_reservoir_params(labels)
+H = hamiltonian(params)
+temperature = 2norm(params.Γ)
+leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
+# mask = Dict(l => l^2 * 10 * (rand() - 0.5) for l in keys(leads))
+mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
+input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
+# input = ContinuousInput(VoltageWrapper(MaskedInput(mask, signal)))
+
+ls = LindbladSystem(H, leads; usecache=true)
+lazyls = LazyLindbladSystem(H, leads)
+to_mat = Base.Fix2(QuantumDots.tomatrix, ls)
+ode_kwargs = (; abstol=1e-8, reltol=1e-8)
+@time sol1 = to_mat.(solve(odeproblem(ls, input, tspan), Tsit5(); saveat=ts, ode_kwargs...).u);
+@time sol2 = odeproblem2(lazyls, input, tspan; tol=1e-12);
+@time sol3 = solve(odeproblem(lazyls, input, tspan), Tsit5(); saveat=ts, ode_kwargs...).u;
+@time sol4 = to_mat.(odeproblem2(ls, input, tspan; tol=1e-12));
+# plot(map(norm, rhos - sol2))
+map(rhos -> norm(map(r -> tr(r) - 1, rhos)), [sol1, sol2, sol3, sol4])
+plot(map(norm, sol1 - sol2))
+plot!(map(norm, sol2 - sol3))
+plot!(map(norm, sol3 - sol4))
+plot!(map(norm, sol4 - sol1))
+plot!(map(norm, sol2 - sol4))
+plot!(map(norm, sol1 - sol3))
+
+# sol2 = solve(odeproblem(lazyls, input, tspan, rand_initial_state), Tsit5(); ode_kwargs...)
+currents = [get_currents(sol, ls, input, t, number_operator) for t in ts]
+currents = [get_currents(sol, lazyls, input, t, number_operator) for t in ts]
+currents2 = [get_currents(sol2, lazyls, input, t, number_operator) for t in ts]
+# currents2 = [get_currents(rho, lazyls) for rho in sol2]
+spectrum = [get_spectrum(ls, input, t) for t in ts]
+overlaps = [abs(dot(sol(t), sol2(t))) / (norm(sol(t)) * norm(sol2(t))) for t in ts]
+
+n_train_first = (x -> isnothing(x) ? findfirst(ts .> tfinal * 1 / 3) : x)(findfirst(overlaps .> 0.99))
+n_test_first = max(n_train_first + 1, findfirst(ts .> tfinal * 2 / 3))
+n_train = n_train_first:n_test_first-1
+n_test = n_test_first:length(ts)
+
+Xtrain = permutedims(stack(currents[n_train]))
+ytrain = stack([target.(ts[n_train]) for target in targets])
+Xtest = permutedims(stack(currents[n_test]))
+ytest = stack([target.(ts[n_test]) for target in targets])
+W = fit(ytrain, Xtrain)
+
+ztrain = predict(W, Xtrain)#[W[:, 1:end-1] * Xtrain .+ W[:, end] for W in Ws]
+ztest = predict(W, Xtest)#[W[:, 1:end-1] * Xtest .+ W[:, end] for W in Ws]
+mses = [mean((ytest .- ztest) .^ 2) for (ytest, ztest) in zip(eachcol(ytest), eachcol(ztest))]
+memory_capacities = [(cov(ztest[:], ytest[:]) / (std(ztest) * std(ytest)))^2 for (ytest, ztest) in zip(eachcol(ytest), eachcol(ztest))]
+evals = eigvals(Matrix(H))
+gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
+average_gapratio = mean(gapratios)
+ediffs = QuantumDots.commutator(Diagonal(evals)).diag
+##
+result = (; seed, spectrum, currents, sol, ts, input, H, sol2, temperature, evals, params, ztrain, ztest, targets, targetnames, mses, memory_capacities, overlaps, n_train_first, n_test_first, n_train, n_test, ediffs, average_gapratio, W, leads)
+push!(results, result)
+# end
+
+##
+function odeproblem2(_ls, input, tspan; kwargs...)
+    ls = deepcopy(_ls)
+    QuantumDots.update_coefficients!(ls, input(tspan[1]))
+    initial_state = collect(stationary_state(ls))
+    odeproblem2(ls, input, tspan, initial_state; copy=false, kwargs...)
+end
+function odeproblem2(_ls, input::DiscreteInput, tspan, initial_state; copy=true, kwargs...)
+    ls = copy ? deepcopy(_ls) : _ls
+    dt = input.dt
+    ts = range(tspan..., step=dt)
+    rhos = [initial_state]
+    # infos = []
+    for t in ts[1:end-1]
+        QuantumDots.update_coefficients!(ls, input(t))
+        rho, info = exponentiate(ls, dt, rhos[end]; kwargs...)
+        # rho2 = expv(dt, ls, rhos[end])
+        # println(norm(rho-rho2))
+        push!(rhos, rho)
+        # push!(infos, info)
+    end
+    return rhos
+end
+function odeproblem(_ls, input::DiscreteInput, tspan, initial_state; copy=true, kwargs...)
+    ls = copy ? deepcopy(_ls) : _ls
+    p = (ls, input)
+    ODEProblem(f_ode!, initial_state, tspan, p; kwargs...)
+end
+##
+lsc = deepcopy(ls)
+[norm(QuantumDots.update_coefficients!(lsc, input(t)).total) for t in range(tspan..., 100N)] |> plot
