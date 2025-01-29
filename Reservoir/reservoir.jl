@@ -214,32 +214,43 @@ push!(results, result)
 ##
 DelayedSignal(signal, delay::Int, history=zeros(delay)) = vcat(history, signal[1:end-delay])
 ##
-for seed in 1:2
+results = []
+for seed in 1:100
     # seed = 33129
     Random.seed!(seed)
-    tfinal = 50
+    tfinal = 200
     tspan = (0, tfinal)
-    N = 10
+    N = 100
     ts = range(tspan..., N + 1)[1:end-1]
     time_multiplexing = 1
     dt = tfinal / N
-    signal = [sin(t / 20) for t in ts]
+    signal_frequency = 1 / 20
+    signal = [sin(t * signal_frequency) for t in ts]
+    mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
     input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
-
     targets = Dict(["narma" => narma(5, default_narma_parameters, signal), "identity" => signal, "delay 10" => DelayedSignal(signal, 10)])
     # targetnames = ["narma", "identity", "delay 2"]
     params = rand_reservoir_params(labels)
     H = hamiltonian(params)
-    temperature = 2norm(params.Γ)
+    temperature = 2norm(values(params.Γ))
     leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
-    mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
     res = reservoir(c, H, leads, input, StationaryState())
     measurements = run_reservoir(res, tspan; time_multiplexing)
     task_props = task_properties(measurements, targets)
     res_props = reservoir_properties(res, tspan)
     result = (; seed, signal, res, params, ts, measurements, tspan, input, temperature, task_props..., res_props..., time_multiplexing)
-    display(summary_gif2(result))
+    push!(results, result)
+    # display(summary_gif2(result))
 end
+##
+sortedresults = sort(results, by=x -> norm(x.mses));
+summary_gif2(first(sortedresults))
+summary_gif2(last(sortedresults))
+##
+plot(map(x -> norm(x.mses), sortedresults), label="mse")
+plot!(map(x -> norm(x.memory_capacities .- 1), sortedresults), label="memcap - 1")
+plot!(map(x -> x.average_gapratio, sortedresults), label="average_gapratio")
+plot!(map(x -> x.temperature, sortedresults), label="temperature")
 ##
 function summary_gif2(result)
     @unpack signal, res, W, seed, spectrum, measurements, ts, input, temperature, evals, params, ztrain, ztest, targets, mses, memory_capacities, n_train_first, n_test_first, n_train, n_test, ediffs, average_gapratio, time_multiplexing = result
@@ -247,8 +258,8 @@ function summary_gif2(result)
     xlims = maximum(abs ∘ real, first(spectrum)) .* (-1.01, 0.01)
     ylims = maximum(abs ∘ imag, first(spectrum)) .* (-1.01, 1.01)
     leadlabels = permutedims(collect(keys(input(tspan[1]))))
-    # multiplexedlabels = permutedims(reduce(vcat, map(n -> map(l -> "Lead$l, n$n", leadlabels), 1:time_multiplexing)))
-    pcurrent = plot(ts, stack(measurements)', xlabel="t", ylabel="current", legend=false, marker = true)#, label=multiplexedlabels,legendtitle="Lead", legendposition=:topright#)
+    multiplexedlabels = permutedims(reduce(vcat, map(n -> map(l -> string("$l,$n"), leadlabels), 1:time_multiplexing)))
+    pcurrent = plot(ts, stack(measurements)', xlabel="t", ylabel="current", legend=false, marker=true)#, label=multiplexedlabels,legendtitle="Lead", legendposition=:topright#)
 
     ptargets = map(eachcol(ztrain), eachcol(ztest), collect(pairs(targets))) do ztrain, ztest, (name, target)
         ptarget = plot(ts, target, label=name, xlabel="t")
@@ -264,13 +275,15 @@ function summary_gif2(result)
 
     infos = (; seed, temperature=round(temperature, digits=2), average_gapratio=round(average_gapratio, digits=3), mse=round.(mses, digits=3), memory_capacity=round.(memory_capacities, digits=3))
     pinfo = plot([1:-1 for _ in infos]; framestyle=:none, la=0, label=permutedims(["$k = $v" for (k, v) in pairs(infos)]), legend_font_pointsize=10, legendposition=:top)
-    pW = heatmap(log.(abs.(W')), color=:greys, yticks=(1:length(targets), targetnames), xticks=(1:length(leadlabels)+1, [leadlabels..., "bias"]), title="logabs(W)")
+    pW = heatmap(log.(abs.(W')), color=:greys, yticks=(1:length(targets), targetnames), xticks=(1:length(multiplexedlabels)+1, [multiplexedlabels..., "bias"]), title="logabs(W)")
     # indices = 1:N#round.(Int, range(1, length(spectrum), Nfigs))
     N = length(signal)
-    high_frequency_ts = range(tspan..., N * 5 + 1)[1:end-1]
+    high_frequency_ts = range(tspan..., N * 10 + 1)[1:end-1]
     voltages = stack([[x.μ for x in values(input(t))] for t in high_frequency_ts])'
     # display(voltages)
-    anim = @animate for n in 1:N-1#(s, t) in zip(spectrum, ts)
+    Nfigs = 50
+    dn = max(1, div(N, Nfigs))
+    anim = @animate for n in 1:dn:N-1#(s, t) in zip(spectrum, ts)
         s = spectrum[n]
         t = ts[n]
         pspec = scatter(real(s), imag(s); xlims, ylims, size=(800, 800), ylabel="im", xlabel="re", label="eigenvalues", legendposition=:topleft)
@@ -282,11 +295,11 @@ function summary_gif2(result)
         plot(psignal, pspec, pcurrent, pboltz, pecho, pinfo, pW, ptargets..., layout=(4 + div(length(targets), 2), 2))
 
     end
-    gif(anim, "anim.gif", fps=div(N, 5))
+    gif(anim, "anim.gif", fps=div(length(1:dn:N-1), 5))
 end
 function task_properties(measurements, targets)
     n_train_first = div(N, 10)
-    n_test_first = max(n_train_first + 1, Int(div(N, 10 / 9)))
+    n_test_first = max(n_train_first + 1, Int(div(N, 10 / 7)))
     n_train = n_train_first:n_test_first-1
     n_test = n_test_first:N
 
