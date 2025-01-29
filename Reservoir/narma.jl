@@ -6,7 +6,7 @@ end
 function narma(n, p, input, initial=zeros(n))
     y = deepcopy(initial)
     N = length(input) - n + 1
-    for i in 1:N
+    for i in 1:N-1
         _y = @view input[i:i+n-1]
         _u = @view input[i:i+n-1]
         next_y = narma_step(_y, _u, p)
