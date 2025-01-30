@@ -5,7 +5,7 @@ function summary_gif2(result)
     ylims = maximum(abs ∘ imag, first(spectrum)) .* (-1.01, 1.01)
     leadlabels = permutedims(collect(keys(input(tspan[1]))))
     multiplexedlabels = permutedims(reduce(vcat, map(n -> map(l -> string("$l,$n"), leadlabels), 1:time_multiplexing)))
-    pcurrent = plot(ts, stack(measurements)', xlabel="t", ylabel="current", legend=false, marker=true)#, label=multiplexedlabels,legendtitle="Lead", legendposition=:topright#)
+    pcurrent = plot(ts, stack(measurements)', xlabel="t", ylabel="current", legend=false, marker=false)#, label=multiplexedlabels,legendtitle="Lead", legendposition=:topright#)
     # vline!(pcurrent, ts, color=:red)
 
     ptargets = map(eachcol(ztrain), eachcol(ztest), collect(pairs(targets))) do ztrain, ztest, (name, target)
