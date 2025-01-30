@@ -11,6 +11,7 @@ end
 
 
 function task_properties(measurements, targets)
+    N = length(measurements)
     n_train_first = div(N, 10)
     n_test_first = max(n_train_first + 1, Int(div(N, 10 / 7)))
     n_train = n_train_first:n_test_first-1

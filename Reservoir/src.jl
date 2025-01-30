@@ -20,13 +20,13 @@ end
 (v::VoltageWrapper)(t) = voltage_input(v.signal(t))
 Base.getindex(v::VoltageWrapper, l) = voltage_input(getindex(v.signal, l))
 (c::ContinuousInput)(t) = c.input(t)
-(d::DiscreteInput)(t) = d.input[1+Int(div(t, d.dt))]
+(d::DiscreteInput)(t) = d.input[1+Int(div(t + 100eps(), d.dt))]
 
 function stationary_state(ls::LazyLindbladSystem; kwargs...)
     ss_prob = StationaryStateProblem(ls)
     reshape(solve(ss_prob; abstol=get(kwargs, :abstol, 1e-12)), size(ls.hamiltonian))
 end
-function stationary_state(ls::LindbladSystem; kwargs...)
+function stationary_state(ls; kwargs...)
     ss_prob = StationaryStateProblem(ls)
     solve(ss_prob; abstol=get(kwargs, :abstol, 1e-12))
 end
@@ -45,6 +45,7 @@ default_alg(::LindbladSystem, ::ContinuousInput) = ODE(Tsit5())
 default_alg(::LazyLindbladSystem, ::ContinuousInput) = ODE(Tsit5())
 default_alg(::LindbladSystem, ::DiscreteInput) = PiecewiseTimeSteppingMethod(EXP_SCIML())
 default_alg(::LazyLindbladSystem, ::DiscreteInput) = PiecewiseTimeSteppingMethod(EXP_KRYLOV())
+default_alg(::PauliSystem, ::DiscreteInput) = PiecewiseTimeSteppingMethod(EXP_SCIML())
 
 struct StationaryState end
 struct Reservoir{C,H,L,LS,I,IS,IIS,M}
@@ -61,7 +62,23 @@ end
 struct CurrentMeasurements{O}
     op::O
 end
-(measure::CurrentMeasurements)(rho, ls) = get_currents(rho, ls, measure.op)
+(measure::CurrentMeasurements)(rho, ls::Union{LindbladSystem,LazyLindbladSystem}) = real(QuantumDots.measure(rho, measure.op, ls))
+(measure::CurrentMeasurements)(rho, p::PauliSystem) = QuantumDots.get_currents(rho, p)
+
+# function get_currents(rho, ls::, op)
+#     real(QuantumDots.measure(rho, op, ls))
+# end
+# function get_currents(sol, ls, input::ContinuousInput, t, op)
+#     rho = sol(t)
+#     QuantumDots.update_coefficients!(ls, input(t))
+#     get_currents(rho, ls, op)
+# end
+# function get_currents(sol, ls, input::DiscreteInput, t, op)
+#     n = 1 + Int(div(t + 100eps(), input.dt))
+#     rho = sol[n]
+#     QuantumDots.update_coefficients!(ls, input(t))
+#     get_currents(rho, ls, op)
+# end
 function reservoir(c::FermionBasis, H, leads, input, initial_state=StationaryState(), measure=CurrentMeasurements(numberoperator(c)))
     ls = default_lindblad(H, leads, input)
     Reservoir(c, H, leads, input, ls, deepcopy(ls), initial_state, nothing, measure)
@@ -102,10 +119,13 @@ function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::Pie
 end
 expstep(method::EXP_KRYLOV, ls, dt, rho; kwargs...) = exponentiate(ls, dt, rho; kwargs...)[1]
 expstep(method::EXP_SCIML, ls::LindbladSystem, dt, rho; kwargs...) = expv(dt, ls.total, rho; kwargs...)
+expstep(method::EXP_SCIML, p::PauliSystem, dt, rho; kwargs...) = expv(dt, p.total_master_matrix, rho; kwargs...)
 using DiffEqCallbacks
 function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::ODE, measure; time_multiplexing=1, kwargs...)
     p = (ls, input)
     ts = range(tspan..., step=input.dt)[1:end-1]
+    small_dt = input.dt / time_multiplexing
+    # t_measure = reduce(vcat, [[t + n * small_dt for n in 0:time_multiplexing-1] for t in ts])
     t_measure = range(tspan..., step=input.dt / time_multiplexing)[1:end-1]
     tspan = (tspan[1], t_measure[end])
     affect!(integrator) = QuantumDots.update_coefficients!(integrator.p[1], input(integrator.t))
@@ -129,24 +149,12 @@ function f_ode!(du, u, (ls, input), t)
     mul!(du, ls, u)
 end
 ##
-function get_currents(sol, ls, input::ContinuousInput, t, op=number_operator)
-    rho = sol(t)
-    QuantumDots.update_coefficients!(ls, input(t))
-    get_currents(rho, ls, op)
-end
-function get_currents(sol, ls, input::DiscreteInput, t, op=number_operator)
-    n = 1 + Int(div(t, input.dt))
-    rho = sol[n]
-    QuantumDots.update_coefficients!(ls, input(t))
-    get_currents(rho, ls, op)
-end
+
 function get_spectrum(ls, input, t)
     QuantumDots.update_coefficients!(ls, input(t))
     eigvals(Matrix(ls))
 end
-function get_currents(rho, ls, op=number_operator)
-    real(QuantumDots.measure(rho, op, ls))
-end
+
 function reservoir_properties(res, tspan)
     ls = res.ls
     input = res.input

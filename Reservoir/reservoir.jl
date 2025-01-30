@@ -59,7 +59,7 @@ for seed in 1:1
     targetnames = ["sin", "sin(t-1)", "sin(t-1)^2"]
     params = rand_reservoir_params(labels)
     H = hamiltonian(params)
-    temperature = 2norm(values(params.Γ))
+    temperature = 2sum(values(params.Γ))
     leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
     # mask = Dict(l => l^2 * 10 * (rand() - 0.5) for l in keys(leads))
     mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
@@ -120,7 +120,7 @@ targets = narma(5, default_narma_parameters, signal)#[sin, (x -> sin(x - 1)), x 
 targetnames = ["narma"]
 params = rand_reservoir_params(labels)
 H = hamiltonian(params)
-temperature = 2norm(values(params.Γ))
+temperature = 2sum(values(params.Γ))
 leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
 # mask = Dict(l => l^2 * 10 * (rand() - 0.5) for l in keys(leads))
 mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
@@ -177,40 +177,72 @@ memory_capacities = [(cov(ztest[:], ytest[:]) / (std(ztest) * std(ytest)))^2 for
 push!(results, result)
 ##
 ##
-results = []
-for seed in 1:5
+lindresults = []
+pauliresults = []
+@profview Threads.@threads for seed in 1:100
     # seed = 33129
     Random.seed!(seed)
     tfinal = 40
     tspan = (0, tfinal)
     N = 100
     ts = range(tspan..., N + 1)[1:end-1]
-    time_multiplexing = 1
+    time_multiplexing = 2
     dt = tfinal / N
     signal_frequency = 1 / 2
     signal = [sin(t * signal_frequency) for t in ts]
     targets = Dict(["narma" => narma(5, default_narma_parameters, signal), "identity" => signal, "delay 10" => DelayedSignal(signal, 10)])
     params = rand_reservoir_params(labels)
-    temperature = 2norm(values(params.Γ))
+    temperature = .1sum(values(params.Γ))
     H = hamiltonian(params)
     leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
     mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
     input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
-    res = reservoir(c, H, leads, input, StationaryState())
-    measurements = run_reservoir(res, tspan; time_multiplexing)
-    task_props = task_properties(measurements, targets)
-    res_props = reservoir_properties(res, tspan)
-    result = (; seed, signal, res, params, ts, measurements, tspan, input, temperature, task_props..., res_props..., time_multiplexing)
-    push!(results, result)
+    lindres = reservoir(c, H, leads, input, StationaryState())
+    paulisys = PauliSystem(H, leads)
+    paulires = Reservoir(c, H, leads, input, paulisys, deepcopy(paulisys), StationaryState(), nothing, CurrentMeasurements(numberoperator(c)))
+
+    for (res, out) in zip((paulires, lindres), (pauliresults, lindresults))
+        measurements = run_reservoir(res, tspan; time_multiplexing)
+        simulation_results = (; measurements, res, tspan, time_multiplexing)
+        task_results = task_properties(measurements, targets)
+        res_props = reservoir_properties(res, tspan)
+        other_data = (; params, temperature, seed, signal, input, targets, ts)
+        result = merge(simulation_results, task_results, res_props, other_data)
+        push!(out, result)
+    end
+    # result = (; seed, signal, res, params, ts, measurements, tspan, input, temperature, task_props..., res_props..., time_multiplexing)
+    # push!(lindresults, lindresult)
+    # push!(pauliresults, lindresult)
     # display(summary_gif2(result))
 end
 ##
-sortedresults = sort(results, by=x -> norm(x.mses));
-summary_gif2(first(sortedresults))
-summary_gif2(last(sortedresults))
+sortedlindresults = sort(lindresults, by=x -> norm(x.mses));
+sortedpauliresults = sort(pauliresults, by=x -> norm(x.mses));
 ##
-plot(map(x -> norm(x.mses), sortedresults), label="mse")
-plot!(map(x -> norm(x.memory_capacities .- 1), sortedresults), label="memcap - 1")
-plot!(map(x -> x.average_gapratio, sortedresults), label="average_gapratio")
-plot!(map(x -> x.temperature, sortedresults), label="temperature")
+summary_gif2(first(sortedlindresults))
+summary_gif2(last(sortedlindresults))
 ##
+summary_gif2(first(sortedpauliresults))
+summary_gif2(last(sortedpauliresults))
+##
+let sortedresults = sortedpauliresults
+    plot(map(x -> norm(x.mses), sortedresults), label="mse", ylims = (0, 1))
+    plot!(map(x -> norm(x.memory_capacities .- 1), sortedresults), label="memcap - 1")
+    plot!(map(x -> 1 / sum(values(x.params.Γ)), sortedresults), label="1/sum of Γ")
+    # plot!(map(x -> x.average_gapratio, sortedresults), label="average_gapratio")
+    # plot!(map(x -> x.temperature, sortedresults), label="temperature")
+    # plot!(map(x -> x.smallest_decay_rate, sortedresults), label="smallest_decay_rate")
+end
+let sortedresults = sortedlindresults
+    plot!(map(x -> norm(x.mses), sortedresults), label="mse", ylims = (0, 1))
+    plot!(map(x -> norm(x.memory_capacities .- 1), sortedresults), label="memcap - 1")
+    plot!(map(x -> 1 / sum(values(x.params.Γ)), sortedresults), label="1/sum of Γ")
+    # plot!(map(x -> x.average_gapratio, sortedresults), label="average_gapratio")
+    # plot!(map(x -> x.temperature, sortedresults), label="temperature")
+    # plot!(map(x -> x.smallest_decay_rate, sortedresults), label="smallest_decay_rate")
+end
+##
+
+scatter(1:length(sortedlindresults), map(x -> x.seed, sortedlindresults))
+scatter!(1:length(sortedpauliresults), map(x -> x.seed, sortedpauliresults))
+scatter(map(x -> x.seed, sortedlindresults), map(x -> x.seed, sortedpauliresults))
