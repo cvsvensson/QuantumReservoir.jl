@@ -20,7 +20,7 @@ N = 4
 labels = 1:N
 qn = FermionConservation()
 c = FermionBasis(labels; qn)
-number_operator = sum([c[l]'c[l] for l in labels])
+# number_operator = sum([c[l]'c[l] for l in labels])
 hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2] #&& is_nearest_neighbours(labels[k1], labels[k2])]
 
 ##
@@ -42,42 +42,7 @@ function hamiltonian(params)
     Hqd = qd_level_hamiltonian(c, params.ε)
     Ht + HV + Hqd
 end
-function summary_gif(result, Nfigs=100)
-    @unpack leads, W, seed, spectrum, currents, sol, ts, input, H, sol2, temperature, evals, params, ztrain, ztest, targets, targetnames, mses, memory_capacities, overlaps, n_train_first, n_test_first, n_train, n_test, ediffs, average_gapratio = result
-    xlims = maximum(abs ∘ real, first(spectrum)) .* (-1.01, 0.01)
-    ylims = maximum(abs ∘ imag, first(spectrum)) .* (-1.01, 1.01)
-    leadlabels = transpose(collect(keys(input(0))))
-    signal = stack([collect(values(input.input.signal(t))) for t in ts])'
-    pcurrent = plot(ts, stack(currents)', label=leadlabels, legendtitle="Lead", xlabel="t", ylabel="current", legendposition=:topright)
 
-    inputsignal = [input.input.signal.signal(t) for t in ts]
-    ptargets = map(eachcol(ztrain), eachcol(ztest), targets, targetnames) do ztrain, ztest, target, name
-        ptarget = plot(ts, target.(ts), label="$name", xlabel="t")
-        plot!(ptarget, ts, inputsignal, label="input", c=:black, linestyle=:dash)
-        plot!(ptarget, ts[n_train], ztrain, label="train")
-        plot!(ptarget, ts[n_test], ztest, label="test")
-        ptarget
-    end
-    pecho = plot(ts, overlaps, xlabel="t", label="overlap of two solutions", yrange=(0, 1.01), legendposition=:bottomright)
-    vline!(pecho, [ts[n_train_first]], color=:red, label="start training")
-    smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
-    vline!(pecho, [1 / smallest_decay_rate], label="1/(decay rate)")
-    infos = (; seed, temperature=round(temperature, digits=2), average_gapratio=round(average_gapratio, digits=3), mse=round.(mses, digits=3), memory_capacity=round.(memory_capacities, digits=3))
-    pinfo = plot([1:-1 for _ in infos]; framestyle=:none, la=0, label=permutedims(["$k = $v" for (k, v) in pairs(infos)]), legend_font_pointsize=10, legendposition=:top)
-    pW = heatmap(log.(abs.(W')), color=:greys, yticks=(1:length(targets), targetnames), xticks=(1:length(leadlabels)+1, [leadlabels..., "bias"]), title="logabs(W)")
-    indices = round.(Int, range(1, length(spectrum), Nfigs))
-    anim = @animate for n in indices #(s, t) in zip(spectrum, ts)
-        s = spectrum[n]
-        t = ts[n]
-        pspec = scatter(real(s), imag(s); xlims, ylims, size=(800, 800), ylabel="im", xlabel="re", label="eigenvalues", legendposition=:topleft)
-        boltz = stack([QuantumDots.fermidirac.(ediffs, leads[l].T, input(t)[l].μ) |> sort for l in keys(leads)])
-        psignal = plot(ts, signal, labels=leadlabels, xlabel="t", ylabel="voltage", legendtitle="Lead")
-        vline!(psignal, [t], color=:red, label="t")
-        pboltz = plot(boltz, marker=true, ylims=(0, 1), labels=leadlabels, markersize=1, markerstrokewidth=0, legendposition=:left, ylabel="boltzmann factors")
-        plot(psignal, pspec, pcurrent, pboltz, pecho, pinfo, pW, ptargets..., layout=(4 + div(length(targets), 2), 2))
-    end
-    gif(anim, "anim.gif", fps=div(Nfigs, 5))
-end
 ##
 anims = []
 results = []
@@ -211,7 +176,6 @@ memory_capacities = [(cov(ztest[:], ytest[:]) / (std(ztest) * std(ytest)))^2 for
 ##
 push!(results, result)
 ##
-DelayedSignal(signal, delay::Int, history=zeros(delay)) = vcat(history, signal[1:end-delay])
 ##
 results = []
 for seed in 1:5

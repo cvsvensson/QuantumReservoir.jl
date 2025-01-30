@@ -27,3 +27,5 @@ function task_properties(measurements, targets)
     memory_capacities = [(cov(ztest[:], ytest[:]) / (std(ztest) * std(ytest)))^2 for (ytest, ztest) in zip(eachcol(ytest), eachcol(ztest))]
     return (; W, mses, memory_capacities, ztrain, ztest, targets, n_train_first, n_test_first, n_train, n_test)
 end
+
+DelayedSignal(signal, delay::Int, history=zeros(delay)) = vcat(history, signal[1:end-delay])
