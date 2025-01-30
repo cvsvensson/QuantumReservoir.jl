@@ -162,5 +162,7 @@ function reservoir_properties(res, tspan)
         QuantumDots.update_coefficients!(ls, input(t))
         push!(spectrum, eigvals(Matrix(ls)))
     end
-    return (; evals, spectrum, gapratios, average_gapratio, ediffs)
+    smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
+
+    return (; evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate)
 end
