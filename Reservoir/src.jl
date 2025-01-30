@@ -62,7 +62,7 @@ struct CurrentMeasurements{O}
     op::O
 end
 (measure::CurrentMeasurements)(rho, ls) = get_currents(rho, ls, measure.op)
-function reservoir(c::FermionBasis, H, leads, input, initial_state=StationaryState())
+function reservoir(c::FermionBasis, H, leads, input, initial_state=StationaryState(), measure=CurrentMeasurements(numberoperator(c)))
     ls = default_lindblad(H, leads, input)
     Reservoir(c, H, leads, input, ls, deepcopy(ls), initial_state, nothing, measure)
 end
@@ -96,7 +96,7 @@ function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::Pie
             push!(rhos, rho)
         end
         rho0 = rhos[end]
-        push!(measurements, reduce(vcat,map(rho -> measure(rho, ls), Iterators.take(rhos, time_multiplexing))))
+        push!(measurements, reduce(vcat, map(rho -> measure(rho, ls), Iterators.take(rhos, time_multiplexing))))
     end
     return measurements
 end
@@ -146,4 +146,21 @@ function get_spectrum(ls, input, t)
 end
 function get_currents(rho, ls, op=number_operator)
     real(QuantumDots.measure(rho, op, ls))
+end
+function reservoir_properties(res, tspan)
+    ls = res.ls
+    input = res.input
+    QuantumDots.update_coefficients!(ls, input(tspan[1]))
+    dt = input.dt
+    ts = range(tspan..., step=dt)
+    evals = eigvals(Matrix(res.H))
+    gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
+    average_gapratio = mean(gapratios)
+    ediffs = QuantumDots.commutator(Diagonal(evals)).diag
+    spectrum = []
+    for t in ts[1:end-1]
+        QuantumDots.update_coefficients!(ls, input(t))
+        push!(spectrum, eigvals(Matrix(ls)))
+    end
+    return (; evals, spectrum, gapratios, average_gapratio, ediffs)
 end
