@@ -154,7 +154,7 @@ function get_spectrum(ls, input, t)
     QuantumDots.update_coefficients!(ls, input(t))
     eigvals(Matrix(ls))
 end
-
+using MultivariateStats
 function reservoir_properties(res, tspan)
     ls = res.ls
     input = res.input
@@ -170,6 +170,8 @@ function reservoir_properties(res, tspan)
         QuantumDots.update_coefficients!(ls, input(t))
         push!(spectrum, eigvals(Matrix(ls)))
     end
+    # use pca on meauserments from MultivariateStats.jl
+    pca = fit(PCA, measurements)
     smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
 
     return (; evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate)
