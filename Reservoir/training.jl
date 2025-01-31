@@ -1,6 +1,6 @@
 function MLJLinearModels.fit(target, measurements; β=1e-6, fit_intercept=true)
     ridge = RidgeRegression(β; fit_intercept)
-    reduce(hcat, map(data -> fit(ridge, measurements, data), eachcol(target)))
+    reduce(hcat, map(data -> MLJLinearModels.fit(ridge, measurements, data), eachcol(target)))
 end
 function predict(W, X)
     if size(W, 1) == size(X, 2)
@@ -21,7 +21,7 @@ function task_properties(measurements, targets)
     ytrain = stack([target[n_train] for target in values(targets)])
     Xtest = permutedims(stack(measurements[n_test]))
     ytest = stack([target[n_test] for target in values(targets)])
-    W = fit(ytrain, Xtrain)
+    W = MLJLinearModels.fit(ytrain, Xtrain)
     ztrain = predict(W, Xtrain)
     ztest = predict(W, Xtest)
     mses = [mean((ytest .- ztest) .^ 2) for (ytest, ztest) in zip(eachcol(ytest), eachcol(ztest))]

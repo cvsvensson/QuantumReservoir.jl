@@ -6,6 +6,7 @@ using LinearSolve
 using Plots
 using Statistics
 using MLJLinearModels
+using MultivariateStats
 using ExponentialUtilities
 using KrylovKit
 using UnPack
@@ -41,8 +42,6 @@ function hamiltonian(params)
     Hqd = qd_level_hamiltonian(c, params.ε)
     Ht + HV + Hqd
 end
-
-
 ##
 lindresults = []
 pauliresults = []
@@ -53,7 +52,7 @@ Threads.@threads for seed in 1:100
     tspan = (0, tfinal)
     N = 100
     ts = range(tspan..., N + 1)[1:end-1]
-    time_multiplexing = 2
+    time_multiplexing = 1
     dt = tfinal / N
     signal_frequency = 1 / 2
     signal = [sin(t * signal_frequency) for t in ts]
@@ -66,13 +65,13 @@ Threads.@threads for seed in 1:100
     input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
     lindres = reservoir(c, H, leads, input, StationaryState())
     paulisys = PauliSystem(H, leads)
-    paulires = Reservoir(c, H, leads, input, paulisys, deepcopy(paulisys), StationaryState(), nothing, CurrentMeasurements(numberoperator(c)))
+    paulires = Reservoir(c, H, leads, input, paulisys, deepcopy(paulisys), StationaryState(), nothing, CurrentMeasurements(nothing))
 
     for (res, out) in zip((paulires, lindres), (pauliresults, lindresults))
         measurements = run_reservoir(res, tspan; time_multiplexing)
         simulation_results = (; measurements, res, tspan, time_multiplexing)
         task_results = task_properties(measurements, targets)
-        res_props = reservoir_properties(res, tspan)
+        res_props = reservoir_properties(res, measurements, tspan)
         other_data = (; params, temperature, seed, signal, input, targets, ts)
         result = merge(simulation_results, task_results, res_props, other_data)
         push!(out, result)
@@ -96,6 +95,7 @@ let sortedresults = sortedpauliresults
     plot(map(x -> norm(x.mses), sortedresults), label="mse", ylims=(0, 1))
     plot!(map(x -> norm(x.memory_capacities .- 1), sortedresults), label="memcap - 1")
     plot!(map(x -> 1 / sum(values(x.params.Γ)), sortedresults), label="1/sum of Γ")
+    plot!(map(x -> log(abs(log(principalratio(x.pca)))), sortedresults), label="logabslogs(pr)")
     # plot!(map(x -> x.average_gapratio, sortedresults), label="average_gapratio")
     # plot!(map(x -> x.temperature, sortedresults), label="temperature")
     # plot!(map(x -> x.smallest_decay_rate, sortedresults), label="smallest_decay_rate")
