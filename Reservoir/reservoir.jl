@@ -179,7 +179,7 @@ push!(results, result)
 ##
 lindresults = []
 pauliresults = []
-@profview Threads.@threads for seed in 1:100
+Threads.@threads for seed in 1:10
     # seed = 33129
     Random.seed!(seed)
     tfinal = 40
@@ -205,7 +205,7 @@ pauliresults = []
         measurements = run_reservoir(res, tspan; time_multiplexing)
         simulation_results = (; measurements, res, tspan, time_multiplexing)
         task_results = task_properties(measurements, targets)
-        res_props = reservoir_properties(res, tspan)
+        res_props = reservoir_properties(res, measurements, tspan)
         other_data = (; params, temperature, seed, signal, input, targets, ts)
         result = merge(simulation_results, task_results, res_props, other_data)
         push!(out, result)
