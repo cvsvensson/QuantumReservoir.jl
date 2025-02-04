@@ -33,8 +33,7 @@ function rand_reservoir_params(fermionlabels, leadlabels=fermionlabels, hopping_
     J = Dict((k1, k2) => Jscale * 2(rand() - 0.5) for (k1, k2) in hopping_labels)
     V = Dict((k1, k2) => Vscale * rand() for (k1, k2) in hopping_labels)
     ε = Dict(l => εscale * (rand() - 0.5) for l in fermionlabels)
-    Γ = Dict(l => Γscale * (rand() + Γmin) for l in leadlabels)
-    (; J, V, ε, Γ)
+    (; J, V, ε)
 end
 function hamiltonian(params)
     Ht = hopping_hamiltonian(c, params.J)
@@ -42,6 +41,96 @@ function hamiltonian(params)
     Hqd = qd_level_hamiltonian(c, params.ε)
     Ht + HV + Hqd
 end
+##
+reservoirs = []
+for seed in 1:100
+    Random.seed!(seed)
+    # define all scales
+    scales = (; Vscale=2, Jscale=1, εscale=1)
+    params = rand_reservoir_params(labels; scales...)
+    push!(reservoirs, (; seed, params, scales, qn))
+end
+leads = []
+for seed in 1:100
+    Random.seed!(seed)
+    labels = 1:N
+    temperature = 10 * rand()
+    scales = (; Γscale=1, Γmin=0.1)
+    Γ = Dict(l => scales.Γscale * (rand() + scales.Γmin) for l in labels)
+    push!(leads, (; Γ, scales, seed, temperature, labels))
+end
+##
+(::Pauli)(H, leads) = PauliSystem(H, leads)
+(::Lindblad)(H, leads) = LindbladSystem(H, leads, usecache=true)
+(::LazyLindblad)(H, leads) = LazyLindbladSystem(H, leads)
+function run_reservoir(reservoir, lead, input, measurement, opensystem, alg=PiecewiseTimeSteppingMethod(EXP_SCIML()); kwargs...)
+    H = hamiltonian(reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    system = opensystem(H, leads)
+    @unpack tspan, voltage_input = input
+    @unpack measure, time_multiplexing = measurement
+    rho0 = get_internal_initial_state(system, input)
+    run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; time_multiplexing=1, kwargs...)
+end
+##
+input = let
+    tfinal = 40
+    tspan = (0, tfinal)
+    N = 100
+    ts = range(tspan..., N + 1)[1:end-1]
+    dt = tfinal / N
+    signal_frequency = 1 / 2
+    signal = [sin(t * signal_frequency) for t in ts]
+    mask = Dict(l => (l > 1) * (-1)^(l == 2) * l^2 * 0.5 for l in labels)
+    voltage_input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
+    input = (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState())
+end
+measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=1)
+##
+@profview s1 = [run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML())) for (res, lead) in zip(reservoirs, leads)];
+@time s2 = [run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_KRYLOV())) for (res, lead) in zip(reservoirs, leads)];
+##
+lindresults = []
+pauliresults = []
+Threads.@threads for (reservoir, lead) in zip(reservoirs, leads)
+    Random.seed!(seed)
+    tfinal = 40
+    tspan = (0, tfinal)
+    N = 100
+    ts = range(tspan..., N + 1)[1:end-1]
+    time_multiplexing = 1
+    dt = tfinal / N
+    signal_frequency = 1 / 2
+    signal = [sin(t * signal_frequency) for t in ts]
+    targets = Dict(["narma" => narma(5, default_narma_parameters, signal), "identity" => signal, "delay 10" => DelayedSignal(signal, 10)])
+    voltageinputinput = DiscreteInput(VoltageWrapper(MaskedInput(lead.mask, signal)), dt)
+    input = (; tspan, dt, signal, targets, voltageinput, initial_state=StationaryState())
+    measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing)
+
+    H = hamiltonian(reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    # _leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
+    # leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
+    # mask = Dict(l => (l > 1) * (-1)^(l == 2) * l^2 * 0.5 for l in keys(leads))
+    lindres = reservoir(c, H, leads, input, StationaryState())
+    paulisys = PauliSystem(H, leads)
+    paulires = Reservoir(c, H, leads, input, paulisys, deepcopy(paulisys), StationaryState(), nothing, CurrentMeasurements(nothing))
+
+    for (res, out) in zip((paulires, lindres), (pauliresults, lindresults))
+        measurements = run_reservoir(res, tspan; time_multiplexing)
+        simulation_results = (; measurements, res, tspan, time_multiplexing)
+        task_results = task_properties(measurements, targets)
+        res_props = reservoir_properties(res, measurements, tspan)
+        other_data = (; params, temperature, seed, signal, input, targets, ts)
+        result = merge(simulation_results, task_results, res_props, other_data)
+        push!(out, result)
+    end
+    # result = (; seed, signal, res, params, ts, measurements, tspan, input, temperature, task_props..., res_props..., time_multiplexing)
+    # push!(lindresults, lindresult)
+    # push!(pauliresults, lindresult)
+    # display(summary_gif2(result))
+end
+
 ##
 lindresults = []
 pauliresults = []
@@ -57,11 +146,11 @@ Threads.@threads for seed in 1:100
     signal_frequency = 1 / 2
     signal = [sin(t * signal_frequency) for t in ts]
     targets = Dict(["narma" => narma(5, default_narma_parameters, signal), "identity" => signal, "delay 10" => DelayedSignal(signal, 10)])
-    params = rand_reservoir_params(labels)
+    params = rand_reservoir_params(labels; Γmin=1)
     temperature = 2sum(values(params.Γ))
     H = hamiltonian(params)
     leads = Dict(l => NormalLead(c[l]' * params.Γ[l]; T=temperature, μ=0.0) for l in labels)
-    mask = Dict(l => (l > 1) * l^2 * 0.5 for l in keys(leads))
+    mask = Dict(l => (l > 1) * (-1)^(l == 2) * l^2 * 0.5 for l in keys(leads))
     input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
     lindres = reservoir(c, H, leads, input, StationaryState())
     paulisys = PauliSystem(H, leads)

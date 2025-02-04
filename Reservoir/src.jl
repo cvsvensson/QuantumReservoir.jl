@@ -47,6 +47,10 @@ default_alg(::LindbladSystem, ::DiscreteInput) = PiecewiseTimeSteppingMethod(EXP
 default_alg(::LazyLindbladSystem, ::DiscreteInput) = PiecewiseTimeSteppingMethod(EXP_KRYLOV())
 default_alg(::PauliSystem, ::DiscreteInput) = PiecewiseTimeSteppingMethod(EXP_SCIML())
 
+struct Pauli end
+struct Lindblad end
+struct LazyLindblad end
+
 struct StationaryState end
 struct Reservoir{C,H,L,LS,I,IS,IIS,M}
     c::C
@@ -79,24 +83,29 @@ end
 #     QuantumDots.update_coefficients!(ls, input(t))
 #     get_currents(rho, ls, op)
 # end
-function reservoir(c::FermionBasis, H, leads, input, initial_state=StationaryState(), measure=CurrentMeasurements(numberoperator(c)))
-    ls = default_lindblad(H, leads, input)
-    Reservoir(c, H, leads, input, ls, deepcopy(ls), initial_state, nothing, measure)
+# function reservoir(c::FermionBasis, H, leads, input, initial_state=StationaryState(), measure=CurrentMeasurements(numberoperator(c)))
+#     ls = default_lindblad(H, leads, input)
+#     Reservoir(c, H, leads, input, ls, deepcopy(ls), initial_state, nothing, measure)
+# end
+# function SciMLBase.init(res::Reservoir{<:Any,<:Any,<:Any,<:Any,<:Any,StationaryState}, t0)
+#     QuantumDots.update_coefficients!(res.ls, res.input(t0))
+#     internal_initial_state = collect(stationary_state(res.ls))
+#     Reservoir(res.c, res.H, res.leads, res.input, res.ls, res.ls, res.initial_state, internal_initial_state, res.measure)
+# end
+function get_internal_initial_state(system, input)
+    t0 = input.tspan[1]
+    QuantumDots.update_coefficients!(system, input.voltage_input(t0))
+    QuantumDots.internal_rep(collect(stationary_state(system)), system)
 end
-function SciMLBase.init(res::Reservoir{<:Any,<:Any,<:Any,<:Any,<:Any,StationaryState}, t0)
-    QuantumDots.update_coefficients!(res.ls, res.input(t0))
-    internal_initial_state = collect(stationary_state(res.ls))
-    Reservoir(res.c, res.H, res.leads, res.input, res.ls, res.ls, res.initial_state, internal_initial_state, res.measure)
-end
-function SciMLBase.init(res::Reservoir, t0)
-    QuantumDots.update_coefficients!(res.ls, res.input(t0))
-    internal_initial_state = QuantumDots.internal_rep(res.ls, res.initial_state)
-    Reservoir(res.c, res.H, res.leads, res.input, res.ls, res.ls, res.initial_state, internal_initial_state, res.measure)
-end
-function run_reservoir(res::Reservoir, tspan, alg=default_alg(res.ls, res.input), measure=CurrentMeasurements(numberoperator(res.c)); kwargs...)
-    resinit = init(res, tspan[1])
-    run_reservoir!(resinit.ls, resinit.input, tspan, resinit.internal_initial_state, alg, measure; kwargs...)
-end
+# function SciMLBase.init(res::Reservoir, t0)
+#     QuantumDots.update_coefficients!(res.ls, res.input(t0))
+#     internal_initial_state = QuantumDots.internal_rep(res.ls, res.initial_state)
+#     Reservoir(res.c, res.H, res.leads, res.input, res.ls, res.ls, res.initial_state, internal_initial_state, res.measure)
+# end
+# function run_reservoir(res::Reservoir, tspan, alg=default_alg(res.ls, res.input), measure=CurrentMeasurements(numberoperator(res.c)); kwargs...)
+#     resinit = init(res, tspan[1])
+#     run_reservoir!(resinit.ls, resinit.input, tspan, resinit.internal_initial_state, alg, measure; kwargs...)
+# end
 
 function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::PiecewiseTimeSteppingMethod, measure; time_multiplexing=1, kwargs...)
     # ls = copy ? deepcopy(_ls) : _ls
@@ -118,6 +127,7 @@ function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::Pie
     return measurements
 end
 expstep(method::EXP_KRYLOV, ls, dt, rho; kwargs...) = exponentiate(ls, dt, rho; kwargs...)[1]
+expstep(method::EXP_KRYLOV, p::PauliSystem, dt, rho; kwargs...) = exponentiate(p.total_master_matrix, dt, rho; kwargs...)[1]
 expstep(method::EXP_SCIML, ls::LindbladSystem, dt, rho; kwargs...) = expv(dt, ls.total, rho; kwargs...)
 expstep(method::EXP_SCIML, p::PauliSystem, dt, rho; kwargs...) = expv(dt, p.total_master_matrix, rho; kwargs...)
 using DiffEqCallbacks
