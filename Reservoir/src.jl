@@ -106,30 +106,49 @@ end
 #     resinit = init(res, tspan[1])
 #     run_reservoir!(resinit.ls, resinit.input, tspan, resinit.internal_initial_state, alg, measure; kwargs...)
 # end
-
-function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::PiecewiseTimeSteppingMethod, measure; time_multiplexing=1, kwargs...)
+get_ham(ls::LindbladSystem) = ls.matrixhamiltonian
+get_ham(ls::LazyLindbladSystem) = ls.hamiltonian
+get_ham(p::PauliSystem) = first(values(p.dissipators)).H
+function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::PiecewiseTimeSteppingMethod, measure; time_multiplexing=1, save_spectrum=false, kwargs...)
     # ls = copy ? deepcopy(_ls) : _ls
     QuantumDots.update_coefficients!(ls, input(tspan[1]))
     dt = input.dt
     ts = range(tspan..., step=dt)
     rho0 = initial_state
     measurements = []
+    spectrum = save_spectrum ? [] : nothing
+
+    evals = sort(get_ham(ls).values)
+    gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
+    average_gapratio = mean(gapratios)
+    ediffs = QuantumDots.commutator(Diagonal(evals)).diag
+
+    cache = get_cache(alg.alg, ls)
     for t in ts[1:end-1]
         QuantumDots.update_coefficients!(ls, input(t))
         rhos = [rho0]
-        for n in 1:time_multiplexing
-            rho = expstep(alg.alg, ls, dt / time_multiplexing, rhos[end])
+        save_spectrum && push!(spectrum, eigvals(Matrix(ls)))
+        for _ in 1:time_multiplexing
+            rho = expstep(alg.alg, ls, dt / time_multiplexing, rhos[end], cache)
             push!(rhos, rho)
         end
         rho0 = rhos[end]
         push!(measurements, reduce(vcat, map(rho -> measure(rho, ls), Iterators.take(rhos, time_multiplexing))))
     end
-    return measurements
+
+    smallest_decay_rate = save_spectrum ? mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum) : nothing
+
+    return (; measurements, evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate)
 end
-expstep(method::EXP_KRYLOV, ls, dt, rho; kwargs...) = exponentiate(ls, dt, rho; kwargs...)[1]
-expstep(method::EXP_KRYLOV, p::PauliSystem, dt, rho; kwargs...) = exponentiate(p.total_master_matrix, dt, rho; kwargs...)[1]
-expstep(method::EXP_SCIML, ls::LindbladSystem, dt, rho; kwargs...) = expv(dt, ls.total, rho; kwargs...)
-expstep(method::EXP_SCIML, p::PauliSystem, dt, rho; kwargs...) = expv(dt, p.total_master_matrix, rho; kwargs...)
+expstep(method::EXP_KRYLOV, ls, dt, rho, cache=nothing; kwargs...) = exponentiate(ls, dt, rho; kwargs...)[1]
+expstep(method::EXP_KRYLOV, p::PauliSystem, dt, rho, cache=nothing; kwargs...) = exponentiate(p.total_master_matrix, dt, rho; kwargs...)[1]
+expstep(method::EXP_SCIML, ls::LindbladSystem, dt, rho, cache=nothing; kwargs...) = expv(dt, ls.total, rho; cache, kwargs...)
+expstep(method::EXP_SCIML, p::PauliSystem, dt, rho, cache=nothing; kwargs...) = expv(dt, p.total_master_matrix, rho; cache, kwargs...)
+get_cache(::EXP_SCIML, ls) = ExpvCache{eltype(ls)}(30)
+get_cache(::EXP_KRYLOV, ls) = nothing
+# ksA = KrylovSubspace{complex(eltype(A))}(n, maxiter)
+# arnoldi!(ksA, A, vrho0; tol=abstol, m)
+
 using DiffEqCallbacks
 function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::ODE, measure; time_multiplexing=1, kwargs...)
     p = (ls, input)
@@ -160,28 +179,80 @@ function f_ode!(du, u, (ls, input), t)
 end
 ##
 
-function get_spectrum(ls, input, t)
-    QuantumDots.update_coefficients!(ls, input(t))
-    eigvals(Matrix(ls))
-end
-function reservoir_properties(res, measurements, tspan)
-    ls = res.ls
-    input = res.input
-    QuantumDots.update_coefficients!(ls, input(tspan[1]))
-    dt = input.dt
-    ts = range(tspan..., step=dt)
-    evals = eigvals(Matrix(res.H))
-    gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
-    average_gapratio = mean(gapratios)
-    ediffs = QuantumDots.commutator(Diagonal(evals)).diag
-    spectrum = []
-    for t in ts[1:end-1]
-        QuantumDots.update_coefficients!(ls, input(t))
-        push!(spectrum, eigvals(Matrix(ls)))
-    end
-    # use pca on meauserments from MultivariateStats.jl
-    pca = MultivariateStats.fit(PCA, stack(measurements))
-    smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
+# function get_spectrum(ls, input, t)
+#     QuantumDots.update_coefficients!(ls, input(t))
+#     eigvals(Matrix(ls))
+# end
+# function reservoir_properties(res, input)
+#     tspan = input.tspan
+#     ls = res.ls
+#     input = res.input
+#     QuantumDots.update_coefficients!(ls, input(tspan[1]))
+#     dt = input.dt
+#     ts = range(tspan..., step=dt)
+#     evals = eigvals(Matrix(res.H))
+#     gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
+#     average_gapratio = mean(gapratios)
+#     ediffs = QuantumDots.commutator(Diagonal(evals)).diag
+#     spectrum = []
+#     for t in ts[1:end-1]
+#         QuantumDots.update_coefficients!(ls, input(t))
+#         push!(spectrum, eigvals(Matrix(ls)))
+#     end
+#     smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
 
-    return (; evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate, pca)
+#     return (; evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate)
+# end
+
+# function reservoir_properties(reservoir, lead, input, opensystem)
+# H = hamiltonian(reservoir.params)
+# leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+# # system = opensystem(H, leads)
+# reservoir_properties(H, input)
+# end
+# function reservoir_properties(H)
+#     # @unpack voltage_input, ts, tspan, dt = input
+#     # H = hamiltonian(reservoir.params)
+
+#     # QuantumDots.update_coefficients!(system, voltage_input(tspan[1]))
+#     evals = eigvals(Matrix(H))
+#     gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
+#     average_gapratio = mean(gapratios)
+#     ediffs = QuantumDots.commutator(Diagonal(evals)).diag
+#     # spectrum = get_spectrum(system, input)
+#     # smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
+#     # return (; evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate)
+#     return (; evals, gapratios, average_gapratio, ediffs)
+# end
+# function get_spectrum(reservoir, lead, input, opensystem)
+#     H = hamiltonian(reservoir.params)
+#     leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+#     system = opensystem(H, leads)
+#     get_spectrum(system, input)
+# end
+# function get_spectrum(system, input)
+#     @unpack voltage_input, ts = input
+#     T = Vector{complex(eltype(eigvals(Matrix(system))))}
+#     spectrum = T[]
+#     for t in ts
+#         QuantumDots.update_coefficients!(system, voltage_input(t))
+#         push!(spectrum, eigvals(Matrix(system)))
+#     end
+#     return spectrum
+# end
+
+function fullanalysis(reservoir, lead, input, opensystem, measurement, target, training; kwargs...)
+    H = hamiltonian(reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    system = opensystem(H, leads)
+    fullanalysis(system, H, input, measurement, target, training; kwargs...)
+end
+function fullanalysis(system::QuantumDots.AbstractOpenSystem, H, input, measurement, target, training; alg=default_alg(system, input.voltage_input), kwargs...)
+    @unpack voltage_input, ts, tspan, dt = input
+    @unpack measure, time_multiplexing = measurement
+    rho0 = get_internal_initial_state(system, input)
+    simulation = run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; save_spectrum=true, time_multiplexing, kwargs...)
+    @unpack warmup, train = training
+    task_props = fit(simulation.measurements, targets; warmup=0.2, train=0.5)
+    return (; simulation, fit=task_props)
 end

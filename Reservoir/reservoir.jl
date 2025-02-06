@@ -10,6 +10,7 @@ using MultivariateStats
 using ExponentialUtilities
 using KrylovKit
 using UnPack
+using OhMyThreads
 Random.seed!(1234)
 includet("..\\system.jl")
 includet("src.jl")
@@ -79,16 +80,69 @@ input = let
     N = 100
     ts = range(tspan..., N + 1)[1:end-1]
     dt = tfinal / N
-    signal_frequency = 1 / 2
-    signal = [sin(t * signal_frequency) for t in ts]
+    # signal_frequency = 1 / 2
+    # signal = [sin(t * signal_frequency) for t in ts]
+    signal = [(-1)^rand(Bool) for _ in ts]
     mask = Dict(l => (l > 1) * (-1)^(l == 2) * l^2 * 0.5 for l in labels)
     voltage_input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
-    input = (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState())
+    (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState(), ts)
 end
 measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=1)
 ##
-@profview s1 = [run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML())) for (res, lead) in zip(reservoirs, leads)];
-@time s2 = [run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_KRYLOV())) for (res, lead) in zip(reservoirs, leads)];
+save_spectrum = false
+@time measurements1 = tmap(reservoirs, leads) do res, lead
+    run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+end;
+@time measurements2 = tmap(reservoirs, leads) do res, lead
+    run_reservoir(res, lead, input, measurement, Lindblad(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+end;
+res_lead_combinations = collect(Iterators.product(reservoirs[1:100], leads[1:99]));
+@time measurementslind = tmap(res_lead_combinations) do (res, lead)
+    run_reservoir(res, lead, input, measurement, Lindblad(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+end;
+@time measurementspauli = tmap(res_lead_combinations) do (res, lead)
+    run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+end;
+##
+targets = ["narma" => narma(5, default_narma_parameters, input.signal), "identity" => input.signal, "delay 10" => DelayedSignal(input.signal, 10)]
+@time task_props_lind = map(measurementslind) do m
+    train(m.measurements, targets; warmup=0.2, train=0.5)
+end;
+@time task_props_pauli = map(measurementspauli) do m
+    train(m.measurements, targets; warmup=0.2, train=0.5)
+end;
+@time phys_props = tmap(res_lead_combinations) do (res, lead)
+    reservoir_properties(res, lead, input, Pauli())
+end;
+##
+fullanalysis(reservoirs[1], leads[1], input, Pauli(), measurement,targets, (; warmup=0.2, training=0.5))
+##
+sorted_task_props_lind = task_props_lind[sortperm(eachrow(task_props_lind), by=v -> norm(map(x -> x.mses, v))), :];
+sorted_task_props_lind = sorted_task_props_lind[:, sortperm(eachcol(task_props_lind), by=v -> norm(map(x -> x.mses, v)))];
+sorted_task_props_pauli = task_props_pauli[sortperm(eachrow(task_props_pauli), by=v -> norm(map(x -> x.mses, v))), :];
+sorted_task_props_pauli = sorted_task_props_pauli[:, sortperm(eachcol(task_props_pauli), by=v -> norm(map(x -> x.mses, v)))];
+##
+heatmap(map(x -> norm(x.mses), sorted_task_props_lind), xlabel=:lead, ylabel=:reservoir, title=:lindblad, colorbar_title="MSE")
+heatmap(map(x -> norm(x.mses), sorted_task_props_pauli), xlabel=:lead, ylabel=:reservoir, title=:pauli, colorbar_title="MSE")
+##
+res_median_performance = vec(median(map(x -> norm(x.mses), task_props_lind), dims=2)) |> sort
+lead_median_performance = vec(median(map(x -> norm(x.mses), task_props_lind), dims=1)) |> sort
+res_best_performance = vec(minimum(map(x -> norm(x.mses), task_props_lind), dims=2)) |> sort
+lead_best_performance = vec(minimum(map(x -> norm(x.mses), task_props_lind), dims=1)) |> sort
+plot(res_median_performance, label="reservoirs median mse over leads", ylabel="mse", legendposition=:bottomright)
+plot!(lead_median_performance, label="leads median mse over reservoirs")
+plot!(res_best_performance, label="reservoirs best mse")
+plot!(lead_best_performance, label="leads best mse")
+##
+function pca_entropy(pca)
+    ps = principalvars(pca)
+    ps = ps / sum(ps)
+    sum(map(x -> -x * log(x), ps))
+end
+heatmap(map(x -> x.temperature, sorted_task_props_pauli), xlabel=:lead, ylabel=:reservoir, title=:pauli)#,clims=(0, .5))
+heatmap(map(x -> pca_entropy(x.pca) |> exp, sorted_task_props_pauli), xlabel=:lead, ylabel=:reservoir, title=:pauli, colorbar_title="PCA entropy effective dimensionality")#,clims=(0, .5))
+heatmap(map(x -> pca_entropy(x.pca) |> exp, sorted_task_props_lind), xlabel=:lead, ylabel=:reservoir, title=:lindblad, colorbar_title="PCA entropy effective dimensionality")#,clims=(0, .5))
+
 ##
 lindresults = []
 pauliresults = []
