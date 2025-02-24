@@ -27,24 +27,10 @@ hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:l
 ##
 rand_initial_state = rand(ComplexF64, 2^length(labels), 2^length(labels)) |> (x -> x'x) |> (x -> x ./ tr(x))
 ##
-function fully_connected_hopping(labels)
-    [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2]
-end
-function rand_reservoir_params(fermionlabels, leadlabels=fermionlabels, hopping_labels=fully_connected_hopping(fermionlabels); Jscale=1, Vscale=1, Γscale=1, εscale=1, Γmin=0.1)
-    J = Dict((k1, k2) => Jscale * 2(rand() - 0.5) for (k1, k2) in hopping_labels)
-    V = Dict((k1, k2) => Vscale * rand() for (k1, k2) in hopping_labels)
-    ε = Dict(l => εscale * (rand() - 0.5) for l in fermionlabels)
-    (; J, V, ε)
-end
-function hamiltonian(params)
-    Ht = hopping_hamiltonian(c, params.J)
-    HV = coulomb_hamiltonian(c, params.V)
-    Hqd = qd_level_hamiltonian(c, params.ε)
-    Ht + HV + Hqd
-end
+
 ##
 reservoirs = []
-for seed in 1:100
+for seed in 1:25
     Random.seed!(seed)
     # define all scales
     scales = (; Vscale=2, Jscale=1, εscale=1)
@@ -52,26 +38,13 @@ for seed in 1:100
     push!(reservoirs, (; seed, params, scales, qn))
 end
 leads = []
-for seed in 1:100
+for seed in 1:25
     Random.seed!(seed)
     labels = 1:N
     temperature = 10 * rand()
     scales = (; Γscale=1, Γmin=0.1)
     Γ = Dict(l => scales.Γscale * (rand() + scales.Γmin) for l in labels)
     push!(leads, (; Γ, scales, seed, temperature, labels))
-end
-##
-(::Pauli)(H, leads) = PauliSystem(H, leads)
-(::Lindblad)(H, leads) = LindbladSystem(H, leads, usecache=true)
-(::LazyLindblad)(H, leads) = LazyLindbladSystem(H, leads)
-function run_reservoir(reservoir, lead, input, measurement, opensystem, alg=PiecewiseTimeSteppingMethod(EXP_SCIML()); kwargs...)
-    H = hamiltonian(reservoir.params)
-    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
-    system = opensystem(H, leads)
-    @unpack tspan, voltage_input = input
-    @unpack measure, time_multiplexing = measurement
-    rho0 = get_internal_initial_state(system, input)
-    run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; time_multiplexing=1, kwargs...)
 end
 ##
 input = let

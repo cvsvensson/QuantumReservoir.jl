@@ -65,6 +65,25 @@ is_nearest_neighbours(k1, k2) = k1 != k2 && all(map((l1, l2) -> abs(l1 - l2) ∈
 #     Dict(couplings)
 # end
 
+
+function fully_connected_hopping(labels)
+    [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2]
+end
+function rand_reservoir_params(fermionlabels, hopping_labels=fully_connected_hopping(fermionlabels); tscale=1, Vscale=1, εscale=1, ttype=Float64)
+    t = Dict((k1, k2) => tscale * 2(rand(ttype) - 0.5) for (k1, k2) in hopping_labels)
+    V = Dict((k1, k2) => Vscale * rand() for (k1, k2) in hopping_labels)
+    ε = Dict(l => εscale * (rand() - 0.5) for l in fermionlabels)
+    (; t, V, ε)
+end
+function hamiltonian(c, params)
+    @unpack t, V, ε = params
+
+    Ht = hopping_hamiltonian(c, t)
+    HV = coulomb_hamiltonian(c, V)
+    Hqd = qd_level_hamiltonian(c, ε)
+    Ht + HV + Hqd
+end
+
 function one_hoppings(labels, s=1)
     couplings = [(k1, k2) => s * 1.0 for (k1, k2) in labels]
     Dict(couplings)

@@ -242,7 +242,8 @@ end
 # end
 
 function fullanalysis(reservoir, lead, input, opensystem, measurement, target, training; kwargs...)
-    H = hamiltonian(reservoir.params)
+    c = reservoir.c
+    H = hamiltonian(c, reservoir.params)
     leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
     system = opensystem(H, leads)
     fullanalysis(system, H, input, measurement, target, training; kwargs...)
@@ -255,4 +256,17 @@ function fullanalysis(system::QuantumDots.AbstractOpenSystem, H, input, measurem
     @unpack warmup, train = training
     task_props = fit(simulation.measurements, targets; warmup=0.2, train=0.5)
     return (; simulation, fit=task_props)
+end
+
+(::Pauli)(H, leads) = PauliSystem(H, leads)
+(::Lindblad)(H, leads) = LindbladSystem(H, leads, usecache=true)
+(::LazyLindblad)(H, leads) = LazyLindbladSystem(H, leads)
+function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg=PiecewiseTimeSteppingMethod(EXP_SCIML()); kwargs...)
+    H = hamiltonian(c, reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    system = opensystem(H, leads)
+    @unpack tspan, voltage_input = input
+    @unpack measure, time_multiplexing = measurement
+    rho0 = get_internal_initial_state(system, input)
+    run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; time_multiplexing=1, kwargs...)
 end
