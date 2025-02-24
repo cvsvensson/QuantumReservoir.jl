@@ -60,16 +60,16 @@ input = let
     voltage_input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
     (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState(), ts)
 end
-measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=1)
+measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=2)
 ##
 save_spectrum = false
-@time measurements1 = tmap(reservoirs, leads) do res, lead
-    run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
-end;
-@time measurements2 = tmap(reservoirs, leads) do res, lead
-    run_reservoir(res, lead, input, measurement, Lindblad(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
-end;
-res_lead_combinations = collect(Iterators.product(reservoirs[1:100], leads[1:99]));
+# @time measurements1 = tmap(reservoirs, leads) do res, lead
+#     run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+# end;
+# @time measurements2 = tmap(reservoirs, leads) do res, lead
+#     run_reservoir(res, lead, input, measurement, Lindblad(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+# end;
+res_lead_combinations = collect(Iterators.product(reservoirs, leads[1:end-1]));
 @time measurementslind = tmap(res_lead_combinations) do (res, lead)
     run_reservoir(res, lead, input, measurement, Lindblad(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
@@ -77,18 +77,18 @@ end;
     run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
 ##
-targets = ["narma" => narma(5, default_narma_parameters, input.signal), "identity" => input.signal, "delay 10" => DelayedSignal(input.signal, 10)]
+targets = ["narma" => narma(5, default_narma_parameters, input.signal), "identity" => input.signal, "delay 5" => DelayedSignal(input.signal, 5)]
 @time task_props_lind = map(measurementslind) do m
-    train(m.measurements, targets; warmup=0.2, train=0.5)
+    fit(m.measurements, targets; warmup=0.2, train=0.5)
 end;
 @time task_props_pauli = map(measurementspauli) do m
-    train(m.measurements, targets; warmup=0.2, train=0.5)
+    fit(m.measurements, targets; warmup=0.2, train=0.5)
 end;
 @time phys_props = tmap(res_lead_combinations) do (res, lead)
     reservoir_properties(res, lead, input, Pauli())
 end;
 ##
-fullanalysis(reservoirs[1], leads[1], input, Pauli(), measurement,targets, (; warmup=0.2, training=0.5))
+fullanalysis(reservoirs[1], leads[1], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 ##
 sorted_task_props_lind = task_props_lind[sortperm(eachrow(task_props_lind), by=v -> norm(map(x -> x.mses, v))), :];
 sorted_task_props_lind = sorted_task_props_lind[:, sortperm(eachcol(task_props_lind), by=v -> norm(map(x -> x.mses, v)))];
@@ -106,6 +106,19 @@ plot(res_median_performance, label="reservoirs median mse over leads", ylabel="m
 plot!(lead_median_performance, label="leads median mse over reservoirs")
 plot!(res_best_performance, label="reservoirs best mse")
 plot!(lead_best_performance, label="leads best mse")
+##
+fullresults_lind = [(; reservoir, lead, measurements, fit) for ((reservoir, lead), measurements, fit) in zip(res_lead_combinations, measurementslind, task_props_lind)];
+sorted_fullresults_lind = sort(fullresults_lind[:], by=x -> norm(x.fit.mses));
+fullresults_pauli = [(; reservoir, lead, measurements, fit) for ((reservoir, lead), measurements, fit) in zip(res_lead_combinations, measurementspauli, task_props_pauli)];
+sorted_fullresults_pauli = sort(fullresults_pauli[:], by=x -> norm(x.fit.mses));
+##
+plot(map(x -> norm(x.fit.mses), sorted_fullresults_lind), ylims=(0, :auto))
+plot!(map(x -> norm(values(x.lead.Γ)), sorted_fullresults_lind))
+plot!(map(x -> maximum(values(x.lead.Γ)), sorted_fullresults_lind))
+## pauli
+plot(map(x -> norm(x.fit.mses), sorted_fullresults_pauli), ylims=(0, :auto))
+plot!(map(x -> norm(values(x.lead.Γ)), sorted_fullresults_pauli))
+
 ##
 function pca_entropy(pca)
     ps = principalvars(pca)
