@@ -127,6 +127,7 @@ function summary_gif(reservoir, lead, input, opensystem, measurement, target, tr
     # display(voltages)
     Nfigs = 50
     dn = max(1, Int(div(N / 2, Nfigs)))
+    first_t = ts[Int(div(N, 2))]
     anim = @animate for n in Int(div(N, 2)):dn:N-1#(s, t) in zip(spectrum, ts)
         s = spectrum[n]
         t = ts[n]
@@ -134,7 +135,7 @@ function summary_gif(reservoir, lead, input, opensystem, measurement, target, tr
         boltz = stack([QuantumDots.fermidirac.(ediffs, temperature, voltage_input(t)[l].μ) |> sort for l in lead.labels])
         psignal = plot(high_frequency_ts, voltages, labels=leadlabels, xlabel="t", ylabel="voltage", legendtitle="Lead", legendposition=:right, xlims=plot_tspan)
         vline!(psignal, [t], color=:red, label="t")
-        vline!(psignal, [1 / smallest_decay_rate], color=:black, lw=2, label="t*")
+        vline!(psignal, [first_t + 1 / smallest_decay_rate], color=:black, lw=2, label="t*")
         pboltz = plot(boltz, marker=true, ylims=(0, 1), labels=leadlabels, markersize=1, markerstrokewidth=0, legendposition=:left, ylabel="fermidirac")
         plot(psignal, pspec, pcurrent, pboltz, pevals, pinfo, pW, ptargets..., layout=(4 + div(length(targets), 2), 2))
 

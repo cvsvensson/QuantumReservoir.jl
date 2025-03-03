@@ -36,7 +36,7 @@ input = let
 end
 ##
 reservoirs = []
-for seed in 1:100
+for seed in 1:50
     Random.seed!(seed)
     # define all scales
     scales = (; Vscale=2, tscale=1, εscale=1)
@@ -44,19 +44,19 @@ for seed in 1:100
     push!(reservoirs, (; seed, params, scales, qn, c))
 end
 leads = []
-for n in 1:30
+for n in 1:20
     # Random.seed!(seed)
     seed = 1
     Random.seed!(seed)
     labels = 1:N
-    temperature = 10 * rand()
-    scales = (; Γscale=2.5 * n / 30, Γmin=0.1)
+    temperature = 1#10 * rand()
+    scales = (; Γscale=10 * n / 30, Γmin=0.1)
     Γ = Dict(l => scales.Γscale * (rand() + scales.Γmin) for l in labels)
     push!(leads, (; Γ, scales, seed, temperature, labels))
 end
 ##
 
-measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=1)
+measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=2)
 ##
 save_spectrum = false
 res_lead_combinations = collect(Iterators.product(reservoirs, leads));
@@ -67,7 +67,8 @@ end;
     run_reservoir(res, lead, input, measurement, Pauli(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
 ##
-targets = ["narma" => narma(5, default_narma_parameters, input.signal), "identity" => input.signal, "delay 10" => DelayedSignal(input.signal, 10)]
+delays = [0, 1, 2, 3]
+targets = [["delay $n" => DelayedSignal(input.signal, n) for n in delays]...] # "identity" => input.signal, "narma" => narma(5, default_narma_parameters, input.signal), 
 @time task_props_lind = map(measurementslind) do m
     fit(m.measurements, targets; warmup=0.2, train=0.5)
 end;
@@ -80,7 +81,7 @@ plot(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.
 plot!(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.mses), task_props_pauli[:]), xlabel="Γ", label="mse pauli", marker=true)
 ##
 pl = plot()
-target_markers = [:circle, :diamond, :square]
+target_markers = [:circle, :diamond, :square, :cross]
 for (n, kv) in enumerate(targets)
     marker = target_markers[n]
     Γ = map(x -> norm(values(x.Γ)), leads)
@@ -90,16 +91,26 @@ for (n, kv) in enumerate(targets)
     mse_pauli = map(mean, eachcol(mses_pauli))
     std_lind = map(std, eachcol(mses_lind))
     std_pauli = map(std, eachcol(mses_pauli))
-    plot!(Γ, mse_lind; xlabel="Γ", label="$(kv[1]) lindblad", color=1, marker, ribbon=std_lind)
+    plot!(Γ, mse_lind; xlabel="Γ", label="$(kv[1]) lindblad", color=1, marker, ribbon=std_lind, clims=(0, 3))
     plot!(Γ, mse_pauli; xlabel="Γ", label="$(kv[1]) pauli", color=2, marker, ribbon=std_pauli)
 end
 pl
 ##
-
+@time propagators_lindblad = tmap(res_lead_combinations) do (res, lead)
+    generate_propagators(res, lead, input, Lindblad(), c)
+end;
+@time propagators_pauli = tmap(res_lead_combinations) do (res, lead)
+    generate_propagators(res, lead, input, Pauli(), c)
+end;
+svdvals_norms_lindblad = map(prop -> [norm(algebra_svdvals(generate_algebra(prop, n))) for n in 1:2], propagators_lindblad);
+svdvals_norms_pauli = map(prop -> [norm(algebra_svdvals(generate_algebra(prop, n))) for n in 1:2], propagators_pauli);
+heatmap(map(ss -> diff(ss)[1] / ss[1], svdvals_norms_lindblad), clims=(0, 0.5))
+heatmap(map(x -> x.mses[3], task_props_pauli), clims=(0, 1))
+##
 summary_gif(reservoirs[1], leads[1], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 summary_gif(reservoirs[1], leads[7], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 summary_gif(reservoirs[1], leads[20], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
-summary_gif(reservoirs[1], leads[end], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
+# summary_gif(reservoirs[1], leads[end], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 
 ##
 heatmap(map(x -> norm(x.mses), task_props_lind), xlabel=:lead, ylabel=:reservoir, title=:lindblad, colorbar_title="MSE")

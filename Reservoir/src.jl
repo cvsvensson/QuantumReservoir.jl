@@ -18,6 +18,7 @@ struct VoltageWrapper{S}
     signal::S
 end
 (v::VoltageWrapper)(t) = voltage_input(v.signal(t))
+Base.getindex(v::DiscreteInput, l) = getindex(v.input, l)
 Base.getindex(v::VoltageWrapper, l) = voltage_input(getindex(v.signal, l))
 (c::ContinuousInput)(t) = c.input(t)
 (d::DiscreteInput)(t) = d.input[1+Int(div(t + 100eps(), d.dt))]
@@ -268,5 +269,58 @@ function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg=P
     @unpack tspan, voltage_input = input
     @unpack measure, time_multiplexing = measurement
     rho0 = get_internal_initial_state(system, input)
-    run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; time_multiplexing=1, kwargs...)
+    run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; time_multiplexing, kwargs...)
+end
+
+function get_input_values(input::Union{DiscreteInput,VoltageWrapper,MaskedInput})
+    unique_input_indices = get_unique_input_indices(input)
+    [input[ind] for ind in unique_input_indices]
+end
+get_unique_input_indices(input::DiscreteInput) = get_unique_input_indices(input.input)
+get_unique_input_indices(input::VoltageWrapper) = get_unique_input_indices(input.signal)
+get_unique_input_indices(input::MaskedInput) = get_unique_input_indices(input.signal)
+get_unique_input_indices(input::Vector) = [findfirst(x -> v == x, input) for v in unique(input)]
+
+function generate_propagators(reservoir, lead, input, opensystem, c; kwargs...)
+    H = hamiltonian(c, reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    system = opensystem(H, leads)
+    generate_propagators(system, get_input_values(input.voltage_input), input.dt)
+end
+function generate_propagators(system, input_values, dt)
+    method = ExpMethodHigham2005()
+    cache = ExponentialUtilities.alloc_mem(Matrix(system), method)
+    map(input_values) do input
+        QuantumDots.update_coefficients!(system, input)
+        exponential!(dt * Matrix(system), method, cache)
+    end
+end
+
+using Combinatorics
+function generate_algebra(propagators::AbstractVector, depth::Int)
+    elements = [propagators]
+    for _ in 1:depth-1
+        push!(elements, increase_depth(elements))
+    end
+    return reduce(vcat, elements)
+end
+
+function increase_depth(elements::Vector{<:AbstractVector{E}}) where {E}
+    new_depth = length(elements) + 1
+    combinations = partitions(new_depth, 2)
+    new_elements = E[]
+    for (n1, n2) in combinations
+        for e1 in elements[n1]
+            for e2 in elements[n2]
+                if e1 != e2
+                    push!(new_elements, e1 * e2 - e2 * e1)
+                end
+            end
+        end
+    end
+    return new_elements
+end
+
+function algebra_svdvals(elements)
+    svdvals(mapreduce(vec, hcat, elements))
 end

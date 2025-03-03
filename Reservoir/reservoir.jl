@@ -33,7 +33,7 @@ reservoirs = []
 for seed in 1:25
     Random.seed!(seed)
     # define all scales
-    scales = (; Vscale=2, Jscale=1, εscale=1)
+    scales = (; Vscale=2, tscale=1, εscale=1)
     params = rand_reservoir_params(labels; scales...)
     push!(reservoirs, (; seed, params, scales, qn))
 end
@@ -71,10 +71,10 @@ save_spectrum = false
 # end;
 res_lead_combinations = collect(Iterators.product(reservoirs, leads[1:end-1]));
 @time measurementslind = tmap(res_lead_combinations) do (res, lead)
-    run_reservoir(res, lead, input, measurement, Lindblad(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+    run_reservoir(res, lead, input, measurement, Lindblad(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
 @time measurementspauli = tmap(res_lead_combinations) do (res, lead)
-    run_reservoir(res, lead, input, measurement, Pauli(), PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+    run_reservoir(res, lead, input, measurement, Pauli(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
 ##
 targets = ["narma" => narma(5, default_narma_parameters, input.signal), "identity" => input.signal, "delay 5" => DelayedSignal(input.signal, 5)]
