@@ -11,6 +11,7 @@ using ExponentialUtilities
 using KrylovKit
 using UnPack
 using OhMyThreads
+using LogExpFunctions
 Random.seed!(1234)
 includet("..\\system.jl")
 includet("src.jl")
@@ -23,20 +24,25 @@ labels = 1:N
 qn = FermionConservation()
 c = FermionBasis(labels; qn)
 hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2] #&& is_nearest_neighbours(labels[k1], labels[k2])]
-input = let
-    tfinal = 40
-    tspan = (0, tfinal)
-    N = 100
-    ts = range(tspan..., N + 1)[1:end-1]
-    dt = tfinal / N
-    signal = [(-1)^rand(Bool) for _ in ts]
-    mask = Dict(l => (l > 1) * (-1)^(l == 2) * l^2 * 0.5 for l in labels)
-    voltage_input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
-    (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState(), ts)
-end
+Random.seed!(321)
+signal = [(-1)^rand(Bool) for _ in 1:200]
+inputs = [
+    let
+        #tfinal = 40
+        tspan = (0, tfinal)
+        N = length(signal)
+        ts = range(tspan..., N + 1)[1:end-1]
+        dt = tfinal / N
+        mask = Dict(l => (l > 1) * (-1)^(l == 2) * l^2 * 0.5 for l in labels)
+        voltage_input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
+        (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState(), ts)
+    end
+    for tfinal in range(1, 1 * 1000, 20)
+]
 ##
+Nres = 10
 reservoirs = []
-for seed in 1:50
+for seed in 1:Nres
     Random.seed!(seed)
     # define all scales
     scales = (; Vscale=2, tscale=1, εscale=1)
@@ -44,70 +50,127 @@ for seed in 1:50
     push!(reservoirs, (; seed, params, scales, qn, c))
 end
 leads = []
-for n in 1:20
+for seed in 1:Nres
     # Random.seed!(seed)
-    seed = 1
+    # seed = 1
     Random.seed!(seed)
     labels = 1:N
-    temperature = 1#10 * rand()
-    scales = (; Γscale=10 * n / 30, Γmin=0.1)
+    temperature = 5 #* rand() + 1
+    # scales = (; Γscale=20 * n / 30, Γmin=0.1)
+    scales = (; Γscale=1, Γmin=0.1)
     Γ = Dict(l => scales.Γscale * (rand() + scales.Γmin) for l in labels)
     push!(leads, (; Γ, scales, seed, temperature, labels))
 end
 ##
-
-measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=2)
+measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=1)
+# ##
+# save_spectrum = false
+# res_lead_combinations = collect(zip(reservoirs, leads))#collect(Iterators.product(reservoirs, leads));
+# @time measurementslind = tmap(res_lead_combinations) do (res, lead)
+#     run_reservoir(res, lead, input, measurement, Lindblad(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+# end;
+# @time measurementspauli = tmap(res_lead_combinations) do (res, lead)
+#     run_reservoir(res, lead, input, measurement, Pauli(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+# end;
+# @time propagators_lindblad = tmap(res_lead_combinations) do (res, lead)
+#     generate_propagators(res, lead, input, Lindblad(), c)
+# end;
+# @time propagators_pauli = tmap(res_lead_combinations) do (res, lead)
+#     generate_propagators(res, lead, input, Pauli(), c)
+# end;
 ##
 save_spectrum = false
-res_lead_combinations = collect(Iterators.product(reservoirs, leads));
-@time measurementslind = tmap(res_lead_combinations) do (res, lead)
+res_lead_input_combinations = collect(Iterators.product(zip(reservoirs, leads), inputs))
+@time measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
     run_reservoir(res, lead, input, measurement, Lindblad(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
-@time measurementspauli = tmap(res_lead_combinations) do (res, lead)
+@time measurementspauli = tmap(res_lead_input_combinations) do ((res, lead), input)
     run_reservoir(res, lead, input, measurement, Pauli(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
 end;
-##
-delays = [0, 1, 2, 3]
-targets = [["delay $n" => DelayedSignal(input.signal, n) for n in delays]...] # "identity" => input.signal, "narma" => narma(5, default_narma_parameters, input.signal), 
-@time task_props_lind = map(measurementslind) do m
-    fit(m.measurements, targets; warmup=0.2, train=0.5)
-end;
-@time task_props_pauli = map(measurementspauli) do m
-    fit(m.measurements, targets; warmup=0.2, train=0.5)
-end;
-##
-# plot the mses for the different reservoirs
-plot(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.mses), task_props_lind[:]), xlabel="Γ", label="mse lindblad", marker=true)
-plot!(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.mses), task_props_pauli[:]), xlabel="Γ", label="mse pauli", marker=true)
-##
-pl = plot()
-target_markers = [:circle, :diamond, :square, :cross]
-for (n, kv) in enumerate(targets)
-    marker = target_markers[n]
-    Γ = map(x -> norm(values(x.Γ)), leads)
-    mses_lind = map(x -> x.mses[n], task_props_lind)
-    mses_pauli = map(x -> x.mses[n], task_props_pauli)
-    mse_lind = map(mean, eachcol(mses_lind))
-    mse_pauli = map(mean, eachcol(mses_pauli))
-    std_lind = map(std, eachcol(mses_lind))
-    std_pauli = map(std, eachcol(mses_pauli))
-    plot!(Γ, mse_lind; xlabel="Γ", label="$(kv[1]) lindblad", color=1, marker, ribbon=std_lind, clims=(0, 3))
-    plot!(Γ, mse_pauli; xlabel="Γ", label="$(kv[1]) pauli", color=2, marker, ribbon=std_pauli)
-end
-pl
-##
-@time propagators_lindblad = tmap(res_lead_combinations) do (res, lead)
+@time propagators_lindblad = tmap(res_lead_input_combinations) do ((res, lead), input)
     generate_propagators(res, lead, input, Lindblad(), c)
 end;
-@time propagators_pauli = tmap(res_lead_combinations) do (res, lead)
+@time propagators_pauli = tmap(res_lead_input_combinations) do ((res, lead), input)
     generate_propagators(res, lead, input, Pauli(), c)
 end;
+@time master_matrices_lindblad = tmap(res_lead_input_combinations) do ((res, lead), input)
+    generate_master_matrices(res, lead, input, Lindblad(), c)
+end;
+@time master_matrices_pauli = tmap(res_lead_input_combinations) do ((res, lead), input)
+    generate_master_matrices(res, lead, input, Pauli(), c)
+end;
+## make non-linearity measure from commutator
+algebras_lindblad = map(prop -> generate_algebra(prop, 5), propagators_lindblad);
+algebras_pauli = map(prop -> generate_algebra(prop, 5), propagators_pauli);
+non_linearity_lindblad = map(v -> v[2] / v[1], map(alg -> mean.(norm.(alg)), algebras_lindblad))
+non_linearity_pauli = map(v -> v[2] / v[1], map(alg -> mean.(norm.(alg)), algebras_pauli))
+## make memory-measure from eigenvalues
+min_gaps_lindblad = map(props -> minimum(map(vals -> abs(vals[end-1] / vals[end]), eigvals.(props))), propagators_lindblad)
+min_gaps_pauli = map(props -> minimum(map(vals -> abs(vals[end-1] / vals[end]), eigvals.(props))), propagators_pauli)
+min_decay_rate_lindblad = map(A -> minimum(map(vals -> abs(vals[end-1]), eigvals.(A))), master_matrices_lindblad)
+min_decay_rate_pauli = map(A -> minimum(map(vals -> abs(vals[end-1]), eigvals.(A))), master_matrices_pauli)
+
+# min_gaps_lindblad = map(props -> minimum(map(vals -> exp(sum(xlogx ∘ abs, vals)), eigvals.(props))), propagators_lindblad)
+# min_gaps_pauli = map(props -> minimum(map(vals -> exp(sum(xlogx ∘ abs, vals)), eigvals.(props))), propagators_pauli)
+svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_lindblad)
+svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_pauli)
+
+##
+delays = 0:2#[1, 2, 3]
+targets = map(input -> [["delay $n" => DelayedSignal(input.signal, n) for n in delays]...], inputs) # "identity" => input.signal, "narma" => narma(5, default_narma_parameters, input.signal), 
+@time task_props_lind = map(enumerate(eachcol(measurementslind))) do (n, m)
+    map(m -> fit(m.measurements, targets[n]; warmup=0.2, train=0.5), m)
+end;
+@time task_props_pauli = map(enumerate(eachcol(measurementspauli))) do (n, m)
+    map(m -> fit(m.measurements, targets[n]; warmup=0.2, train=0.5), m)
+end;
+# @time task_props_pauli = map(eachcol(measurementslind), targets) do m, targets
+#     fit(m.measurements, targets; warmup=0.2, train=0.5)
+# end;
+##
+# # plot the mses for the different reservoirs
+# plot(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.mses), task_props_lind[:]), xlabel="Γ", label="mse lindblad", marker=true)
+# plot!(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.mses), task_props_pauli[:]), xlabel="Γ", label="mse pauli", marker=true)
+
+## 
+pl = plot(; size=(800, 600), legend=:topright, frame=:box, title="MSE on delay tasks", ylabel="MSE", xlabel="dt/t̃")
+target_markers = [:circle, :diamond, :square, :cross]
+dts = map(x -> x.dt, inputs)
+mean_decay_time_lindblad = mean(inv, min_decay_rate_lindblad)
+mean_decay_time_pauli = mean(inv, min_decay_rate_pauli)
+mean_decay_time = mean((mean_decay_rate_lindblad, mean_decay_rate_pauli))
+dts_lind = dts ./ mean_decay_time
+dts_pauli = dts ./ mean_decay_time
+# Γ = map(x -> norm(values(x.Γ)), leads)
+for (n, kv) in enumerate(targets[1])
+    marker = target_markers[n]
+    mse_lind = map(task -> mean(x -> x.mses[n], task), task_props_lind)
+    mse_pauli = map(task -> mean(x -> x.mses[n], task), task_props_pauli)
+    # mse_lind = map(mean, eachcol(mses_lind))
+    # mse_pauli = map(mean, eachcol(mses_pauli))
+    # std_lind = map(std, eachcol(mses_lind))
+    # std_pauli = map(std, eachcol(mses_pauli))
+    std_lind = map(task -> std(map(x -> x.mses[n], task)), task_props_lind)
+    std_pauli = map(task -> std(map(x -> x.mses[n], task)), task_props_pauli)
+    plot!(dts_lind, mse_lind; label="$(kv[1]) lindblad", color=1, marker, ribbon=std_lind, clims=(0, 3))
+    plot!(dts_pauli, mse_pauli; label="$(kv[1]) pauli", color=2, marker, ribbon=std_pauli)
+end
+plot!(dts_lind, map(mean, eachcol(non_linearity_lindblad)); label="non-linearity lindblad", lw=3, color=1, ls=:dash)
+plot!(dts_pauli, map(mean, eachcol(non_linearity_pauli)); label="non-linearity pauli", lw=3, color=2, ls=:dash)
+plot!(dts_lind, map(mean, eachcol(min_gaps_lindblad)); label="eigenvalue gap lindblad", lw=3, color=1, ls=:dot)
+plot!(dts_pauli, map(mean, eachcol(min_gaps_pauli)); label="eigenvalue gap pauli", lw=3, color=2, ls=:dot)
+# plot!(Γ, map(mean, eachcol(svd_entropy_lindblad));  label="svd entropy lindblad")
+# plot!(Γ, map(mean, eachcol(svd_entropy_pauli));  label="svd entropy pauli")
+pl
+
+##
 svdvals_norms_lindblad = map(prop -> [norm(algebra_svdvals(generate_algebra(prop, n))) for n in 1:2], propagators_lindblad);
 svdvals_norms_pauli = map(prop -> [norm(algebra_svdvals(generate_algebra(prop, n))) for n in 1:2], propagators_pauli);
+heatmap(map(ss -> norm(ss), svdvals_norms_lindblad))
 heatmap(map(ss -> diff(ss)[1] / ss[1], svdvals_norms_lindblad), clims=(0, 0.5))
 heatmap(map(x -> x.mses[3], task_props_pauli), clims=(0, 1))
 ##
-summary_gif(reservoirs[1], leads[1], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[1], inputs[13], Pauli(), measurement, targets[13], (; warmup=0.2, train=0.5))
 summary_gif(reservoirs[1], leads[7], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 summary_gif(reservoirs[1], leads[20], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 # summary_gif(reservoirs[1], leads[end], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))

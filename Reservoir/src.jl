@@ -40,6 +40,7 @@ struct EXP_SCIML end
 struct ODE{A}
     alg::A
 end
+struct Generators end
 default_lindblad(H, leads, ::ContinuousInput) = LazyLindbladSystem(H, leads)
 default_lindblad(H, leads, ::DiscreteInput) = LindbladSystem(H, leads, usecache=true)
 default_alg(::LindbladSystem, ::ContinuousInput) = ODE(Tsit5())
@@ -249,7 +250,7 @@ function fullanalysis(reservoir, lead, input, opensystem, measurement, target, t
     system = opensystem(H, leads)
     fullanalysis(system, H, input, measurement, target, training; kwargs...)
 end
-function fullanalysis(system::QuantumDots.AbstractOpenSystem, H, input, measurement, target, training; alg=default_alg(system, input.voltage_input), kwargs...)
+function fullanalysis(system::QuantumDots.AbstractOpenSystem, H, input, measurement, targets, training; alg=default_alg(system, input.voltage_input), kwargs...)
     @unpack voltage_input, ts, tspan, dt = input
     @unpack measure, time_multiplexing = measurement
     rho0 = get_internal_initial_state(system, input)
@@ -295,6 +296,20 @@ function generate_propagators(system, input_values, dt)
         exponential!(dt * Matrix(system), method, cache)
     end
 end
+function generate_master_matrices(reservoir, lead, input, opensystem, c; kwargs...)
+    H = hamiltonian(c, reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    system = opensystem(H, leads)
+    generate_master_matrices(system, get_input_values(input.voltage_input))
+end
+function generate_master_matrices(system, input_values)
+    method = ExpMethodHigham2005()
+    cache = ExponentialUtilities.alloc_mem(Matrix(system), method)
+    map(input_values) do input
+        QuantumDots.update_coefficients!(system, input)
+        Matrix(system)
+    end
+end
 
 using Combinatorics
 function generate_algebra(propagators::AbstractVector, depth::Int)
@@ -302,7 +317,7 @@ function generate_algebra(propagators::AbstractVector, depth::Int)
     for _ in 1:depth-1
         push!(elements, increase_depth(elements))
     end
-    return reduce(vcat, elements)
+    return elements#reduce(vcat, elements)
 end
 
 function increase_depth(elements::Vector{<:AbstractVector{E}}) where {E}
@@ -310,11 +325,12 @@ function increase_depth(elements::Vector{<:AbstractVector{E}}) where {E}
     combinations = partitions(new_depth, 2)
     new_elements = E[]
     for (n1, n2) in combinations
-        for e1 in elements[n1]
-            for e2 in elements[n2]
-                if e1 != e2
-                    push!(new_elements, e1 * e2 - e2 * e1)
+        for (k1, e1) in enumerate(elements[n1])
+            for (k2, e2) in enumerate(elements[n2])
+                if n1 == n2 && k1 >= k2
+                    continue
                 end
+                push!(new_elements, e1 * e2 - e2 * e1)
             end
         end
     end
