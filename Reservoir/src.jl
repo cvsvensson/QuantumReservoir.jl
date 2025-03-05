@@ -21,7 +21,7 @@ end
 Base.getindex(v::DiscreteInput, l) = getindex(v.input, l)
 Base.getindex(v::VoltageWrapper, l) = voltage_input(getindex(v.signal, l))
 (c::ContinuousInput)(t) = c.input(t)
-(d::DiscreteInput)(t) = d.input[1+Int(div(t + 100eps(), d.dt))]
+(d::DiscreteInput)(t) = d.input[1+Int(div(t + d.dt / 1000, d.dt))]
 
 function stationary_state(ls::LazyLindbladSystem; kwargs...)
     ss_prob = StationaryStateProblem(ls)
@@ -111,13 +111,14 @@ end
 get_ham(ls::LindbladSystem) = ls.matrixhamiltonian
 get_ham(ls::LazyLindbladSystem) = ls.hamiltonian
 get_ham(p::PauliSystem) = first(values(p.dissipators)).H
-function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::PiecewiseTimeSteppingMethod, measure; time_multiplexing=1, save_spectrum=false, kwargs...)
+function run_reservoir!(ls, input::DiscreteInput, ts, initial_state, alg::PiecewiseTimeSteppingMethod, measure; time_multiplexing=1, save_spectrum=false, kwargs...)
     # ls = copy ? deepcopy(_ls) : _ls
-    QuantumDots.update_coefficients!(ls, input(tspan[1]))
+    QuantumDots.update_coefficients!(ls, input(first(ts)))
     dt = input.dt
-    ts = range(tspan..., step=dt)
+    # ts = input.ts
+    #ts = range(tspan..., step=dt)
     rho0 = initial_state
-    measurements = []
+    measurements = typeof(measure(rho0, ls))[]
     spectrum = save_spectrum ? [] : nothing
 
     evals = sort(get_ham(ls).values)
@@ -135,7 +136,8 @@ function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::Pie
             push!(rhos, rho)
         end
         rho0 = rhos[end]
-        push!(measurements, reduce(vcat, map(rho -> measure(rho, ls), Iterators.take(rhos, time_multiplexing))))
+        # push!(measurements, reduce(vcat, map(rho -> measure(rho, ls), Iterators.take(rhos, time_multiplexing))))
+        push!(measurements, reduce(vcat, map(rho -> measure(rho, ls), Iterators.drop(rhos, 1))))
     end
 
     smallest_decay_rate = save_spectrum ? mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum) : nothing
@@ -152,12 +154,14 @@ get_cache(::EXP_KRYLOV, ls) = nothing
 # arnoldi!(ksA, A, vrho0; tol=abstol, m)
 
 using DiffEqCallbacks
-function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::ODE, measure; time_multiplexing=1, kwargs...)
+function run_reservoir!(ls, input::DiscreteInput, ts, initial_state, alg::ODE, measure; time_multiplexing=1, kwargs...)
     p = (ls, input)
-    ts = range(tspan..., step=input.dt)[1:end-1]
-    small_dt = input.dt / time_multiplexing
+    dt = input.dt
+    ts = input.ts
+    # ts = range(tspan..., step=input.dt)[1:end-1]
+    small_dt = dt / time_multiplexing
     # t_measure = reduce(vcat, [[t + n * small_dt for n in 0:time_multiplexing-1] for t in ts])
-    t_measure = range(tspan..., step=input.dt / time_multiplexing)[1:end-1]
+    t_measure = sort(vcat(ts, ts .+ small_dt))#range(tspan..., step=small_dt)[1:end-1]
     tspan = (tspan[1], t_measure[end])
     affect!(integrator) = QuantumDots.update_coefficients!(integrator.p[1], input(integrator.t))
     cb = PresetTimeCallback(ts, affect!)
@@ -171,9 +175,9 @@ function run_reservoir!(ls, input::DiscreteInput, tspan, initial_state, alg::ODE
     solve(ODEProblem(f_ode!, initial_state, tspan, p; callback, kwargs...), alg.alg; kwargs...)
     return map(data -> reduce(vcat, data), Iterators.partition(saved_values.saveval, time_multiplexing))
 end
-function run_reservoir!(ls, input::ContinuousInput, tspan, initial_state, measure, alg::ODE; kwargs...)
+function run_reservoir!(ls, input::ContinuousInput, ts, initial_state, measure, alg::ODE; kwargs...)
     p = (ls, input)
-    solve(ODEProblem(f_ode!, initial_state, tspan, p; kwargs...))
+    solve(ODEProblem(f_ode!, initial_state, ts, p; kwargs...))
 end
 function f_ode!(du, u, (ls, input), t)
     QuantumDots.update_coefficients!(ls, input(t))
@@ -254,7 +258,7 @@ function fullanalysis(system::QuantumDots.AbstractOpenSystem, H, input, measurem
     @unpack voltage_input, ts, tspan, dt = input
     @unpack measure, time_multiplexing = measurement
     rho0 = get_internal_initial_state(system, input)
-    simulation = run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; save_spectrum=true, time_multiplexing, kwargs...)
+    simulation = run_reservoir!(system, voltage_input, ts, rho0, alg, measure; save_spectrum=true, time_multiplexing, kwargs...)
     @unpack warmup, train = training
     task_props = fit(simulation.measurements, targets; warmup=0.2, train=0.5)
     return (; simulation, fit=task_props)
@@ -267,10 +271,10 @@ function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg=P
     H = hamiltonian(c, reservoir.params)
     leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
     system = opensystem(H, leads)
-    @unpack tspan, voltage_input = input
+    @unpack ts, voltage_input = input
     @unpack measure, time_multiplexing = measurement
     rho0 = get_internal_initial_state(system, input)
-    run_reservoir!(system, voltage_input, tspan, rho0, alg, measure; time_multiplexing, kwargs...)
+    run_reservoir!(system, voltage_input, ts, rho0, alg, measure; time_multiplexing, kwargs...)
 end
 
 function get_input_values(input::Union{DiscreteInput,VoltageWrapper,MaskedInput})
@@ -304,10 +308,10 @@ function generate_master_matrices(reservoir, lead, input, opensystem, c; kwargs.
 end
 function generate_master_matrices(system, input_values)
     method = ExpMethodHigham2005()
-    cache = ExponentialUtilities.alloc_mem(Matrix(system), method)
+    # cache = ExponentialUtilities.alloc_mem(Matrix(system), method)
     map(input_values) do input
         QuantumDots.update_coefficients!(system, input)
-        Matrix(system)
+        Matrix(Matrix(system))
     end
 end
 
@@ -338,5 +342,21 @@ function increase_depth(elements::Vector{<:AbstractVector{E}}) where {E}
 end
 
 function algebra_svdvals(elements)
-    svdvals(mapreduce(vec, hcat, elements))
+    svdvals(mapreduce(vec, hcat, reduce(vcat, elements)))
+end
+
+function moving_average(A::AbstractArray, m::Int)
+    out = similar(A)
+    R = CartesianIndices(A)
+    Ifirst, Ilast = first(R), last(R)
+    I1 = m ÷ 2 * oneunit(Ifirst)
+    for I in R
+        n, s = 0, zero(eltype(out))
+        for J in max(Ifirst, I - I1):min(Ilast, I + I1)
+            s += A[J]
+            n += 1
+        end
+        out[I] = s / n
+    end
+    return out
 end
