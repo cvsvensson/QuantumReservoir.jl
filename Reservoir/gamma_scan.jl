@@ -25,7 +25,7 @@ qn = FermionConservation()
 c = FermionBasis(labels; qn)
 hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2] #&& is_nearest_neighbours(labels[k1], labels[k2])]
 Random.seed!(321)
-signal = [(-1)^rand(Bool) for _ in 1:400]
+signal = [(-1)^rand(Bool) for _ in 1:400];
 inputs = [
     let
         #tfinal = 40
@@ -37,10 +37,10 @@ inputs = [
         voltage_input = DiscreteInput(VoltageWrapper(MaskedInput(mask, signal)), dt)
         (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState(), ts)
     end
-    for tfinal in range(1, 4 * 1000, 30)
-]
+    for tfinal in range(1, 1 * 1000, 10)
+];
 ##
-Nres = 200
+Nres = 40
 reservoirs = []
 for seed in 1:Nres
     Random.seed!(seed)
@@ -48,7 +48,7 @@ for seed in 1:Nres
     scales = (; Vscale=2, tscale=1, εscale=1)
     params = rand_reservoir_params(labels; scales...)
     push!(reservoirs, (; seed, params, scales, qn, c))
-end
+end;
 leads = []
 for seed in 1:Nres
     # Random.seed!(seed)
@@ -60,9 +60,9 @@ for seed in 1:Nres
     scales = (; Γscale=1, Γmin=0.1)
     Γ = Dict(l => scales.Γscale * (rand() + scales.Γmin) for l in labels)
     push!(leads, (; Γ, scales, seed, temperature, labels))
-end
+end;
 ##
-measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=2)
+measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=4);
 # ##
 # save_spectrum = false
 # res_lead_combinations = collect(zip(reservoirs, leads))#collect(Iterators.product(reservoirs, leads));
@@ -105,23 +105,24 @@ algebras_pauli = map(prop -> generate_algebra(prop, 5), propagators_pauli);
 non_linearity_lindblad = map(v -> v[2] / v[1], map(alg -> mean.(norm.(alg)), algebras_lindblad));
 non_linearity_pauli = map(v -> v[2] / v[1], map(alg -> mean.(norm.(alg)), algebras_pauli));
 ## make memory-measure from eigenvalues
-min_gaps_lindblad = map(props -> minimum(map(vals -> abs(vals[end-1] / vals[end]), eigvals.(props))), propagators_lindblad)
-min_gaps_pauli = map(props -> minimum(map(vals -> abs(vals[end-1] / vals[end]), eigvals.(props))), propagators_pauli)
-min_decay_rate_lindblad = map(A -> minimum(map(vals -> abs(vals[end-1]), eigvals.(A))), master_matrices_lindblad)
-min_decay_rate_pauli = map(A -> minimum(map(vals -> abs(vals[end-1]), eigvals.(A))), master_matrices_pauli)
-non_linearity2_pauli = map(As -> norm(As[1] * As[2] - As[2] * As[1]) / prod(norm, As), master_matrices_pauli)
-non_linearity2_lindblad = map(As -> norm(As[1] * As[2] - As[2] * As[1]) / prod(norm, As), master_matrices_lindblad)
+min_gaps_lindblad = map(props -> minimum(map(vals -> abs(vals[end-1] / vals[end]), eigvals.(props))), propagators_lindblad);
+min_gaps_pauli = map(props -> minimum(map(vals -> abs(vals[end-1] / vals[end]), eigvals.(props))), propagators_pauli);
+min_decay_rate_lindblad = map(A -> minimum(map(vals -> abs(vals[end-1]), eigvals.(A))), master_matrices_lindblad);
+min_decay_rate_pauli = map(A -> minimum(map(vals -> abs(vals[end-1]), eigvals.(A))), master_matrices_pauli);
+non_linearity2_pauli = map(As -> norm(As[1] * As[2] - As[2] * As[1]) / prod(norm, As), master_matrices_pauli);
+non_linearity2_lindblad = map(As -> norm(As[1] * As[2] - As[2] * As[1]) / prod(norm, As), master_matrices_lindblad);
 
 # min_gaps_lindblad = map(props -> minimum(map(vals -> exp(sum(xlogx ∘ abs, vals)), eigvals.(props))), propagators_lindblad)
 # min_gaps_pauli = map(props -> minimum(map(vals -> exp(sum(xlogx ∘ abs, vals)), eigvals.(props))), propagators_pauli)
-svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_lindblad)
-svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_pauli)
-svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_lindblad)
-svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_pauli)
+svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_lindblad);
+svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_pauli);
+svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_lindblad);
+svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_pauli);
 
 ##
-delays = 1:3#[1, 2, 3]
-targets = map(input -> [["delay $n" => DelayedSignal(input.signal, n) for n in delays]...], inputs) # "identity" => input.signal, "narma" => narma(5, default_narma_parameters, input.signal), 
+delays = 3:4#[1, 2, 3]
+# targets = map(input -> [["delay $n" => DelayedSignal(input.signal, n) for n in delays]...], inputs) # "identity" => input.signal, "narma" => narma(5, default_narma_parameters, input.signal), 
+targets = map(input -> [["delay $n" => DelayedSignal(input.signal, n) for n in delays]..., "narma" => narma(5, (; α=0.3, β=0.1, γ=0.5, δ=0), input.signal)], inputs); # "identity" => input.signal, "narma" => narma(5, default_narma_parameters, input.signal), 
 @time task_props_lind = map(enumerate(eachcol(measurementslind))) do (n, m)
     map(m -> fit(m.measurements, targets[n]; warmup=0.2, train=0.5), m)
 end;
@@ -137,7 +138,7 @@ end;
 # plot!(map(x -> norm(values(x[2].Γ)), res_lead_combinations[:]), map(x -> norm(x.mses), task_props_pauli[:]), xlabel="Γ", label="mse pauli", marker=true)
 
 ## 
-pl = plot(; size=(800, 600), legend=:topright, frame=:box, title="MSE on delay tasks", ylabel="MSE", xlabel="dt/t̃", ylims=(-0.01, 1.2))
+pl = plot(; size=(800, 600), legend=:topright, frame=:box, title="MSE on delay tasks", ylabel="MSE", xlabel="dt/t̃", ylims=(-0.01, 3.2))
 target_markers = [:circle, :diamond, :square, :cross]
 dts = map(x -> x.dt, inputs)
 effective_decay_time_lindblad = median(map(inv, min_decay_rate_lindblad))
@@ -164,7 +165,7 @@ for (n, kv) in enumerate(targets[1])
     ribbon_lind = ((mse_lind .- first.(quantile_lind), last.(quantile_lind) .- mse_lind))
     ribbon_pauli = ((mse_pauli .- first.(quantile_pauli), last.(quantile_pauli) .- mse_pauli))
     # display(plot([first.(quantile_lind), last.(quantile_lind)]))
-    plot!(dts_lind, mse_lind; label="$(kv[1]) lindblad", color=1, marker, ribbon=ribbon_lind, clims=(0, 3))
+    plot!(dts_lind, mse_lind; label="$(kv[1]) lindblad", color=1, marker, ribbon=ribbon_lind)
     plot!(dts_pauli, mse_pauli; label="$(kv[1]) pauli", color=2, marker, ribbon=ribbon_pauli)
 end
 plot!(dts_lind, map(median, eachcol(non_linearity_lindblad)); label="non-commutativity lindblad", lw=3, color=1, ls=:dash)
@@ -183,7 +184,8 @@ heatmap(map(ss -> norm(ss), svdvals_norms_lindblad))
 heatmap(map(ss -> diff(ss)[1] / ss[1], svdvals_norms_lindblad), clims=(0, 0.5))
 heatmap(map(x -> x.mses[3], task_props_pauli), clims=(0, 1))
 ##
-summary_gif(reservoirs[1], leads[1], inputs[13], Pauli(), measurement, targets[13], (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[1], inputs[6], Pauli(), measurement, targets[6], (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[1], inputs[6], Lindblad(), measurement, targets[6], (; warmup=0.2, train=0.5))
 summary_gif(reservoirs[1], leads[7], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 summary_gif(reservoirs[1], leads[20], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
 # summary_gif(reservoirs[1], leads[end], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))

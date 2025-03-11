@@ -101,7 +101,7 @@ function summary_gif(reservoir, lead, input, opensystem, measurement, target, tr
     nstart = Int(div(N, inv(start)))
     plot_tspan = (ts[nstart], ts[end])
     multiplexedlabels = permutedims(reduce(vcat, map(n -> map(l -> string("$l,$n"), leadlabels), 1:time_multiplexing)))
-    pcurrent = plot(ts, stack(measurements)', xlabel="t", ylabel="current", legend=false, marker=false, xlims=plot_tspan)#, label=multiplexedlabels,legendtitle="Lead", legendposition=:topright#)
+    pcurrent = plot(ts[1:end-1], stack(measurements)', xlabel="t", ylabel="current", legend=false, marker=false, xlims=plot_tspan)#, label=multiplexedlabels,legendtitle="Lead", legendposition=:topright#)
     # vline!(pcurrent, ts, color=:red)
     @unpack ztrain, ztest, targets, mses, memory_capacities, n_train, n_test, W = result.fit
     # ptargetkwargs = (; marker = true)
@@ -118,7 +118,7 @@ function summary_gif(reservoir, lead, input, opensystem, measurement, target, tr
     smallest_decay_rate = mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum)
     # vline!(pecho, [1 / smallest_decay_rate], label="1/(decay rate)")
     targetnames = collect(keys(targets))
-    infos = (; reservoir_seed, lead_seed, temperature=round(temperature, digits=2), average_gapratio=round(average_gapratio, digits=3), mse=round.(mses, digits=3), memory_capacity=round.(memory_capacities, digits=3), smallest_decay_rate = round(smallest_decay_rate, digits=3))
+    infos = (; reservoir_seed, lead_seed, temperature=round(temperature, digits=2), average_gapratio=round(average_gapratio, digits=3), mse=round.(mses, digits=3), memory_capacity=round.(memory_capacities, digits=3), smallest_decay_rate=round(smallest_decay_rate, digits=3))
     pinfo = plot([1:-1 for _ in infos]; framestyle=:none, la=0, label=permutedims(["$k = $v" for (k, v) in pairs(infos)]), legend_font_pointsize=10, legendposition=:top)
     pW = heatmap(log.(abs.(W')), color=:greys, yticks=(1:length(targets), targetnames), xticks=(1:length(multiplexedlabels)+1, [multiplexedlabels..., "bias"]), title="logabs(W)")
     # indices = 1:N#round.(Int, range(1, length(spectrum), Nfigs))

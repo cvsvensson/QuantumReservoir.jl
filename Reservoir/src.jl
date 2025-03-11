@@ -360,3 +360,5 @@ function moving_average(A::AbstractArray, m::Int)
     end
     return out
 end
+
+transition_matrix(propagators, signal, input_values) = prod(propagators[findfirst(v -> v == s, input_values)] for s in signal)
