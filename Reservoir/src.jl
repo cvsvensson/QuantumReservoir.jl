@@ -115,8 +115,6 @@ function run_reservoir!(ls, input::DiscreteInput, ts, initial_state, alg::Piecew
     # ls = copy ? deepcopy(_ls) : _ls
     QuantumDots.update_coefficients!(ls, input(first(ts)))
     dt = input.dt
-    # ts = input.ts
-    #ts = range(tspan..., step=dt)
     rho0 = initial_state
     measurements = typeof(measure(rho0, ls))[]
     spectrum = save_spectrum ? [] : nothing
@@ -362,3 +360,42 @@ function moving_average(A::AbstractArray, m::Int)
 end
 
 transition_matrix(propagators, signal, input_values) = prod(propagators[findfirst(v -> v == s, input_values)] for s in signal)
+
+
+struct PropagatorMethod end
+function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg::PropagatorMethod; kwargs...)
+    H = hamiltonian(c, reservoir.params)
+    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    system = opensystem(H, leads)
+    @unpack ts, voltage_input, dt = input
+    @unpack measure, time_multiplexing = measurement
+    # propagators = generate_propagators(system, get_input_values(voltage_input), dt)
+    propagators = generate_propagators(system, get_input_values(voltage_input), dt / time_multiplexing)
+    rho0 = get_internal_initial_state(system, input)
+
+    evals = sort(get_ham(system).values)
+    gapratios = map(x -> x > 1 ? inv(x) : x, diff(evals)[1:end-1] ./ diff(evals)[2:end])
+    average_gapratio = mean(gapratios)
+    ediffs = QuantumDots.commutator(Diagonal(evals)).diag
+    input_values = get_input_values(voltage_input)
+    # cache = get_cache(alg.alg, ls)
+    measurements = []
+    spectrum = []
+    for t in ts[1:end-1]
+        QuantumDots.update_coefficients!(system, voltage_input(t))
+        rhos = [rho0]
+        save_spectrum && push!(spectrum, eigvals(Matrix(system)))
+        propagator = propagators[findfirst(v -> v == voltage_input(t), input_values)]
+        for _ in 1:time_multiplexing
+            # rho = expstep(alg.alg, ls, dt / time_multiplexing, rhos[end], cache)
+            rho = propagator * rhos[end]
+            push!(rhos, rho)
+        end
+        rho0 = rhos[end]
+        push!(measurements, reduce(vcat, map(rho -> measure(rho, system), Iterators.drop(rhos, 1))))
+    end
+
+    smallest_decay_rate = save_spectrum ? mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum) : nothing
+
+    return (; measurements, evals, spectrum, gapratios, average_gapratio, ediffs, smallest_decay_rate)
+end

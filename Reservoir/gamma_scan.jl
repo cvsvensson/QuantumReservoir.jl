@@ -40,7 +40,7 @@ inputs = [
     for tfinal in range(1, 1 * 1000, 10)
 ];
 ##
-Nres = 40
+Nres = 10
 reservoirs = []
 for seed in 1:Nres
     Random.seed!(seed)
@@ -62,30 +62,17 @@ for seed in 1:Nres
     push!(leads, (; Γ, scales, seed, temperature, labels))
 end;
 ##
-measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=4);
-# ##
-# save_spectrum = false
-# res_lead_combinations = collect(zip(reservoirs, leads))#collect(Iterators.product(reservoirs, leads));
-# @time measurementslind = tmap(res_lead_combinations) do (res, lead)
-#     run_reservoir(res, lead, input, measurement, Lindblad(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
-# end;
-# @time measurementspauli = tmap(res_lead_combinations) do (res, lead)
-#     run_reservoir(res, lead, input, measurement, Pauli(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
-# end;
-# @time propagators_lindblad = tmap(res_lead_combinations) do (res, lead)
-#     generate_propagators(res, lead, input, Lindblad(), c)
-# end;
-# @time propagators_pauli = tmap(res_lead_combinations) do (res, lead)
-#     generate_propagators(res, lead, input, Pauli(), c)
-# end;
+measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=2);
 ##
 save_spectrum = false
+# alg = PiecewiseTimeSteppingMethod(EXP_SCIML())
+alg = PropagatorMethod()
 res_lead_input_combinations = collect(Iterators.product(zip(reservoirs, leads), inputs))
 @time measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
-    run_reservoir(res, lead, input, measurement, Lindblad(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+    run_reservoir(res, lead, input, measurement, Lindblad(), c, alg; save_spectrum)
 end;
 @time measurementspauli = tmap(res_lead_input_combinations) do ((res, lead), input)
-    run_reservoir(res, lead, input, measurement, Pauli(), c, PiecewiseTimeSteppingMethod(EXP_SCIML()); save_spectrum)
+    run_reservoir(res, lead, input, measurement, Pauli(), c, alg; save_spectrum)
 end;
 @time propagators_lindblad = tmap(res_lead_input_combinations) do ((res, lead), input)
     generate_propagators(res, lead, input, Lindblad(), c)
