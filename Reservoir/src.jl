@@ -9,10 +9,11 @@ struct MaskedInput{M,S}
     mask::M
     signal::S
 end
-(m::MaskedInput)(t) = Dict(l => m.signal(t) * v for (l, v) in pairs(m.mask))
-Base.getindex(m::MaskedInput, i) = Dict(l => getindex(m.signal, i) * v for (l, v) in pairs(m.mask))
+(m::MaskedInput)(t) = ArrayDictionary(keys(m.mask), m.signal(t) * v for (l, v) in pairs(m.mask))
+Base.getindex(m::MaskedInput, i) = ArrayDictionary(keys(m.mask), getindex(m.signal, i) * v for (l, v) in pairs(m.mask))
 function voltage_input(signal)
-    Dict(l => (; μ=v) for (l, v) in pairs(signal))
+    ArrayDictionary(keys(signal), (; μ=v) for (l, v) in pairs(signal))
+    # (; l = (; μ=v) for (l, v) in pairs(signal))
 end
 struct VoltageWrapper{S}
     signal::S
@@ -248,7 +249,7 @@ end
 function fullanalysis(reservoir, lead, input, opensystem, measurement, target, training; kwargs...)
     c = reservoir.c
     H = hamiltonian(c, reservoir.params)
-    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    leads = lead_dict(lead, c)#ArrayDictionary([l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels])
     system = opensystem(H, leads)
     fullanalysis(system, H, input, measurement, target, training; kwargs...)
 end
@@ -267,7 +268,7 @@ end
 (::LazyLindblad)(H, leads) = LazyLindbladSystem(H, leads)
 function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg=PiecewiseTimeSteppingMethod(EXP_SCIML()); kwargs...)
     H = hamiltonian(c, reservoir.params)
-    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    leads = lead_dict(lead, c)#ArrayDictionary([l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels])
     system = opensystem(H, leads)
     @unpack ts, voltage_input = input
     @unpack measure, time_multiplexing = measurement
@@ -286,21 +287,24 @@ get_unique_input_indices(input::Vector) = [findfirst(x -> v == x, input) for v i
 
 function generate_propagators(reservoir, lead, input, opensystem, c; kwargs...)
     H = hamiltonian(c, reservoir.params)
-    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    leads = lead_dict(lead, c)#ArrayDictionary([l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels])
     system = opensystem(H, leads)
     generate_propagators(system, get_input_values(input.voltage_input), input.dt)
 end
 function generate_propagators(system, input_values, dt)
     method = ExpMethodHigham2005()
     cache = ExponentialUtilities.alloc_mem(Matrix(system), method)
-    map(input_values) do input
+    systems = typeof(system)[]
+    propagators = map(input_values) do input
         QuantumDots.update_coefficients!(system, input)
+        push!(systems, deepcopy(system))
         exponential!(dt * Matrix(system), method, cache)
     end
+    return propagators, systems
 end
 function generate_master_matrices(reservoir, lead, input, opensystem, c; kwargs...)
     H = hamiltonian(c, reservoir.params)
-    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    leads = lead_dict(lead, c)#ArrayDictionary([l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels])
     system = opensystem(H, leads)
     generate_master_matrices(system, get_input_values(input.voltage_input))
 end
@@ -363,14 +367,18 @@ transition_matrix(propagators, signal, input_values) = prod(propagators[findfirs
 
 
 struct PropagatorMethod end
+function lead_dict(lead, c)
+    ArrayDictionary(lead.labels, NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+end
+
 function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg::PropagatorMethod; kwargs...)
     H = hamiltonian(c, reservoir.params)
-    leads = Dict(l => NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    leads = lead_dict(lead, c)
     system = opensystem(H, leads)
     @unpack ts, voltage_input, dt = input
     @unpack measure, time_multiplexing = measurement
     # propagators = generate_propagators(system, get_input_values(voltage_input), dt)
-    propagators = generate_propagators(system, get_input_values(voltage_input), dt / time_multiplexing)
+    propagators, systems = generate_propagators(system, get_input_values(voltage_input), dt / time_multiplexing)
     rho0 = get_internal_initial_state(system, input)
 
     evals = sort(get_ham(system).values)
@@ -379,13 +387,17 @@ function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg::
     ediffs = QuantumDots.commutator(Diagonal(evals)).diag
     input_values = get_input_values(voltage_input)
     # cache = get_cache(alg.alg, ls)
-    measurements = []
+    measurement_type = typeof(reduce(vcat, map(rho -> measure(rho, system), [rho0])))
+    measurements = measurement_type[]
     spectrum = []
     for t in ts[1:end-1]
-        QuantumDots.update_coefficients!(system, voltage_input(t))
+        voltage = voltage_input(t)
+        ind = findfirst(v -> v == voltage, input_values)
+        # QuantumDots.update_coefficients!(system, voltage_input(t))
+        system = systems[ind]
+        propagator = propagators[ind]
         rhos = [rho0]
         save_spectrum && push!(spectrum, eigvals(Matrix(system)))
-        propagator = propagators[findfirst(v -> v == voltage_input(t), input_values)]
         for _ in 1:time_multiplexing
             # rho = expstep(alg.alg, ls, dt / time_multiplexing, rhos[end], cache)
             rho = propagator * rhos[end]
