@@ -20,7 +20,7 @@ includet("narma.jl")
 includet("training.jl")
 includet("plots.jl")
 ##
-N = 4
+N = 5
 labels = 1:N
 qn = FermionConservation()
 c = FermionBasis(labels; qn)
@@ -69,10 +69,10 @@ save_spectrum = false
 # alg = PiecewiseTimeSteppingMethod(EXP_SCIML())
 alg = PropagatorMethod()
 res_lead_input_combinations = collect(Iterators.product(zip(reservoirs, leads), inputs));
-@time measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
+@profview measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
     run_reservoir(res, lead, input, measurement, Lindblad(), c, alg; save_spectrum)
 end;
-@time measurementspauli = map(res_lead_input_combinations) do ((res, lead), input)
+@time measurementspauli = tmap(res_lead_input_combinations) do ((res, lead), input)
     run_reservoir(res, lead, input, measurement, Pauli(), c, alg; save_spectrum)
 end;
 @time propagators_lindblad = tmap(res_lead_input_combinations) do ((res, lead), input)
@@ -103,10 +103,10 @@ non_linearity2_lindblad = map(As -> norm(As[1] * As[2] - As[2] * As[1]) / prod(n
 
 # min_gaps_lindblad = map(props -> minimum(map(vals -> exp(sum(xlogx ∘ abs, vals)), eigvals.(props))), propagators_lindblad)
 # min_gaps_pauli = map(props -> minimum(map(vals -> exp(sum(xlogx ∘ abs, vals)), eigvals.(props))), propagators_pauli)
-svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_lindblad);
-svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_pauli);
-svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_lindblad);
-svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_pauli);
+# svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_lindblad);
+# svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), propagators_pauli);
+# svd_entropy_lindblad = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_lindblad);
+# svd_entropy_pauli = map(props -> minimum(map(s -> sum(s) * sum(map(x -> -xlogx(x), s / sum(s))), svdvals.(props))), master_matrices_pauli);
 
 ##
 delays = 2:3#[1, 2, 3]

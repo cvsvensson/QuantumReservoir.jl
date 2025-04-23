@@ -69,8 +69,29 @@ end
 struct CurrentMeasurements{O}
     op::O
 end
-(measure::CurrentMeasurements)(rho, ls::Union{LindbladSystem,LazyLindbladSystem}) = real(QuantumDots.measure(rho, measure.op, ls))
-(measure::CurrentMeasurements)(rho, p::PauliSystem) = QuantumDots.get_currents(rho, p)
+# (measure::CurrentMeasurements)(rho, ls::Union{LindbladSystem,LazyLindbladSystem}) = real(QuantumDots.measure(rho, measure.op, ls))
+# (measure::CurrentMeasurements)(rho, ls::Union{LindbladSystem,LazyLindbladSystem}) = real(_measure(rho, measure.op, ls))
+function specialize(measure::CurrentMeasurements, ls::Union{LindbladSystem,LazyLindbladSystem})
+    op = QuantumDots.internal_rep(measure.op, ls)
+    ops = QuantumDots.AxisKeys.KeyedArray([d' * op for (k, d) in pairs(ls.dissipators)], collect(keys(ls.dissipators)))
+    cache = deepcopy(complex(ls.vectorizer.idvec))
+    # _measure(rho, diss) = real(dot(op, diss * QuantumDots.internal_rep(rho, ls)))
+    # _measure(rho, diss) = real(dot(op, mul!(cache, diss, QuantumDots.internal_rep(rho, ls))))
+    _measure(rho, op) = real(dot(QuantumDots.internal_rep(rho, ls), op))
+    function f(rho)
+        # QuantumDots.AxisKeys.KeyedArray([_measure(rho, d) for (k, d) in pairs(ls.dissipators)], collect(keys(ls.dissipators)))
+        QuantumDots.AxisKeys.KeyedArray([_measure(rho, d) for (k, d) in pairs(ops)], collect(keys(ls.dissipators)))
+    end
+end
+function specialize(::CurrentMeasurements, p::PauliSystem)
+    real ∘ Base.Fix2(QuantumDots.get_currents, p)
+end
+
+# _measure(rho, op, ls::QuantumDots.AbstractOpenSystem) = QuantumDots.AxisKeys.KeyedArray([_measure(rho, op, d, ls) for (k, d) in pairs(ls.dissipators)], collect(keys(ls.dissipators)))
+
+# _measure(rho, op, dissipator::QuantumDots.AbstractDissipator, ls::QuantumDots.AbstractOpenSystem) = dot(op, dissipator * QuantumDots.internal_rep(rho, ls))
+
+# (measure::CurrentMeasurements)(rho, p::PauliSystem) = QuantumDots.get_currents(rho, p)
 
 # function get_currents(rho, ls::, op)
 #     real(QuantumDots.measure(rho, op, ls))
@@ -309,7 +330,7 @@ function generate_master_matrices(reservoir, lead, input, opensystem, c; kwargs.
     generate_master_matrices(system, get_input_values(input.voltage_input))
 end
 function generate_master_matrices(system, input_values)
-    method = ExpMethodHigham2005()
+    # method = ExpMethodHigham2005()
     # cache = ExponentialUtilities.alloc_mem(Matrix(system), method)
     map(input_values) do input
         QuantumDots.update_coefficients!(system, input)
@@ -368,7 +389,8 @@ transition_matrix(propagators, signal, input_values) = prod(propagators[findfirs
 
 struct PropagatorMethod end
 function lead_dict(lead, c)
-    ArrayDictionary(lead.labels, NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    # ArrayDictionary(lead.labels, NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels)
+    Dict(zip(lead.labels, NormalLead(c[l]' * lead.Γ[l]; T=lead.temperature, μ=0.0) for l in lead.labels))
 end
 
 function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg::PropagatorMethod; kwargs...)
@@ -387,24 +409,32 @@ function run_reservoir(reservoir, lead, input, measurement, opensystem, c, alg::
     ediffs = QuantumDots.commutator(Diagonal(evals)).diag
     input_values = get_input_values(voltage_input)
     # cache = get_cache(alg.alg, ls)
-    measurement_type = typeof(reduce(vcat, map(rho -> measure(rho, system), [rho0])))
+
+    specialized_measure = specialize(measure, system)
+
+    measurement_type = typeof(reduce(vcat, map(specialized_measure, [rho0])))
+    # measurement_type = typeof(reduce(vcat, map(rho -> measure(rho, system), [rho0])))
     measurements = measurement_type[]
     spectrum = []
+    rhos = [deepcopy(rho0) for k in 1:time_multiplexing+1]
     for t in ts[1:end-1]
         voltage = voltage_input(t)
         ind = findfirst(v -> v == voltage, input_values)
         # QuantumDots.update_coefficients!(system, voltage_input(t))
         system = systems[ind]
         propagator = propagators[ind]
-        rhos = [rho0]
+        # rhos = [rho0]
         save_spectrum && push!(spectrum, eigvals(Matrix(system)))
-        for _ in 1:time_multiplexing
+        for k in 1:time_multiplexing
             # rho = expstep(alg.alg, ls, dt / time_multiplexing, rhos[end], cache)
-            rho = propagator * rhos[end]
-            push!(rhos, rho)
+            # rho = propagator * rhos[end]
+            mul!(rhos[k+1], propagator, rhos[k])
+            # push!(rhos, rho)
         end
-        rho0 = rhos[end]
-        push!(measurements, reduce(vcat, map(rho -> measure(rho, system), Iterators.drop(rhos, 1))))
+        # rho0 = rhos[end]
+        rhos[1] .= rhos[end]
+        # push!(measurements, reduce(vcat, map(rho -> measure(rho, system), Iterators.drop(rhos, 1))))
+        push!(measurements, reduce(vcat, map(specialized_measure, Iterators.drop(rhos, 1))))
     end
 
     smallest_decay_rate = save_spectrum ? mean(spec -> abs(partialsort(spec, 2, by=abs)), spectrum) : nothing
