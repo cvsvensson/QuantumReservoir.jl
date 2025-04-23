@@ -1,4 +1,5 @@
-using QuantumDots, QuantumDots.BlockDiagonals
+using DrWatson
+using QuantumDots
 using LinearAlgebra
 using Random
 using OrdinaryDiffEqTsit5
@@ -13,6 +14,7 @@ using UnPack
 using OhMyThreads
 using LogExpFunctions
 using Dictionaries
+BLAS.set_num_threads(1)
 Random.seed!(1234)
 includet("..\\system.jl")
 includet("src.jl")
@@ -20,7 +22,7 @@ includet("narma.jl")
 includet("training.jl")
 includet("plots.jl")
 ##
-N = 5
+N = 4
 labels = 1:N
 qn = FermionConservation()
 c = FermionBasis(labels; qn)
@@ -69,9 +71,9 @@ save_spectrum = false
 # alg = PiecewiseTimeSteppingMethod(EXP_SCIML())
 alg = PropagatorMethod()
 res_lead_input_combinations = collect(Iterators.product(zip(reservoirs, leads), inputs));
-@profview measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
+@time measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
     run_reservoir(res, lead, input, measurement, Lindblad(), c, alg; save_spectrum)
-end;
+end
 @time measurementspauli = tmap(res_lead_input_combinations) do ((res, lead), input)
     run_reservoir(res, lead, input, measurement, Pauli(), c, alg; save_spectrum)
 end;
