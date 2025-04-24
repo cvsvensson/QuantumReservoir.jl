@@ -2655,7 +2655,7 @@ version = "2.11.2"
 
 [[deps.QuantumDots]]
 deps = ["AbstractDifferentiation", "AxisKeys", "BlockDiagonals", "Crayons", "Dictionaries", "FillArrays", "LinearAlgebra", "LinearMaps", "OrderedCollections", "PrecompileTools", "SciMLBase", "SkewLinearAlgebra", "SparseArrays", "SplitApplyCombine", "StaticArrays", "TermInterface", "TestItems"]
-path = "C:\\Users\\svens\\Projects\\QuantumDots.jl"
+git-tree-sha1 = "ef49469a20138ef27f1a73e415f7ed9dd2f912e1"
 uuid = "312194fd-fec5-4b07-ba1c-a40d7013a56a"
 version = "0.18.0"
 
