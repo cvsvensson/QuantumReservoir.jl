@@ -1,7 +1,6 @@
-using QuantumDots, QuantumDots.BlockDiagonals, LinearAlgebra
+using FermionicHilbertSpaces, LinearAlgebra
 using Plots
-using LinearSolve
-using OrdinaryDiffEqHighOrderRK
+using OrdinaryDiffEqHighOrderRK, OrdinaryDiffEqTsit5
 using MLJLinearModels
 using ExponentialUtilities
 using Statistics
@@ -10,8 +9,10 @@ using Random
 using LinearMaps
 using Integrals, FastGaussQuadrature
 using ProgressMeter
+includet("opensystems.jl")
+includet("system.jl")
 includet("misc.jl")
-includet("integrated_current_misc.jl")
+includet("QELM/integrated_current_misc.jl")
 #includet("gpu.jl")
 Random.seed!(1234)
 # density_matrix_distribution = DensityMatrixDistribution(Ginibre(2, 2))
@@ -58,7 +59,6 @@ end
 int_alg = GaussLegendre()
 alg = DP8()
 alg = Exponentiation()
-lindbladian = DenseLindblad()
 ##
 
 @time reservoir = prepare_reservoir(rc, reservoir_parameters[1], (T, μs); abstol);
@@ -81,22 +81,32 @@ X_val = val_sols.integrated
 W = fit_output_layer(X_train, y_train)
 loss_function_density_matrix(W, X_val, y_val)
 ##
-data = []
-@showprogress dt = 1 desc = "Running reservoir..." for params in reservoir_parameters[1:50]
-    alg = Exponentiation()
-    reservoir = prepare_reservoir(rc, params, (T, μs); abstol, reltol)
-    mm = measurement_matrix(reservoir, tmax, alg; abstol, reltol)
-    training_sols = run_reservoir_trajectories(reservoir, training_input_states[1:M_train], tmax, alg; abstol, reltol)
-    val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, alg; abstol, reltol)
+function reservoir_sweep(Nlayers)
+    rc = ReservoirConnections(Nlayers, length(μs))
+    training_input_states = random_inputs(rc, 1000)
+    validation_input_states = random_inputs(rc, 1000)
+    reservoir_parameters = [random_parameters(rc, Nmeas) for n in 1:Nres]
+    y_train = stack(get_training_data.(training_input_states[1:M_train]))
+    y_val = stack(get_training_data.(validation_input_states[1:M_val]))
+    data = []
+    @showprogress dt = 1 desc = "Running reservoir..." for params in reservoir_parameters
+        alg = Exponentiation()
+        reservoir = prepare_reservoir(rc, params, (T, μs); abstol, reltol)
+        mm = measurement_matrix(reservoir, tmax, alg; abstol, reltol)
+        training_sols = run_reservoir_trajectories(reservoir, training_input_states[1:M_train], tmax, alg; abstol, reltol)
+        val_sols = run_reservoir_trajectories(reservoir, validation_input_states[1:M_val], tmax, alg; abstol, reltol)
 
-    X_train = training_sols.integrated
-    X_val = val_sols.integrated
-    W = fit_output_layer(X_train, y_train)
-    loss = loss_function_density_matrix(W, X_val, y_val)
-    push!(data, (; loss, cond=cond(mm), mm, W, y_train, y_val, X_train, X_val))
+        X_train = training_sols.integrated
+        X_val = val_sols.integrated
+        W = fit_output_layer(X_train, y_train)
+        loss = loss_function_density_matrix(W, X_val, y_val)
+        push!(data, (; loss, cond=cond(mm), mm, W, y_train, y_val, X_train, X_val))
+    end
+    return data
 end
 ##
-data0 = deepcopy(data)
+data0 = reservoir_sweep(0)
+data1 = reservoir_sweep(1)
 ##
 sp0 = sortperm(map(d -> d.loss, data0))
 sp1 = sortperm(map(d -> d.loss, data1))
@@ -187,6 +197,6 @@ function loss_function(W, X, y)
     end
     return sqrt(loss) #/ size(X, 2)
 end
-loss_function(W1, training_sols.data, training_ensemble.data)
-loss_function(W1, test_sols.data, test_ensemble.data)
+loss_function(W1, X, y)
+loss_function(W1, X_val, y_val[is, :])
 ##

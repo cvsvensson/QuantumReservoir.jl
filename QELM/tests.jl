@@ -1,8 +1,7 @@
-lindbladian = LazyLindblad()
 tmax = 100
 abstol = 1e-12
 reltol = 1e-12
-reservoir = prepare_reservoir(rc, reservoir_parameters[1], (T, μs); abstol, lindbladian);
+reservoir = prepare_reservoir(rc, reservoir_parameters[1], (T, μs); abstol);
 rho0s = training_input_states[1:50]
 int_alg = GaussLegendre()
 ## test measurement_matrix
@@ -19,8 +18,8 @@ mm1 ≈ mm2 ≈ mm3 ≈ mm4 ≈ mm5
 ## rho evolution
 @time sols1 = run_reservoir_trajectories(reservoir, rho0s, tmax, ODE(DP8()); abstol, reltol, int_alg=GaussLegendre(), ensemblealg=EnsembleThreads());
 @time sols2 = run_reservoir_trajectories(reservoir, rho0s, tmax, IntegratedODE(DP8()); abstol, reltol);
-@time sols3 = run_reservoir_trajectories(reservoir, rho0s, tmax, Exponentiation(); abstol, reltol, lindbladian);
-@time sols4 = run_reservoir_trajectories(reservoir, rho0s, tmax, Exponentiation(EXP_krylovkit()); abstol, reltol, lindbladian);
+@time sols3 = run_reservoir_trajectories(reservoir, rho0s, tmax, Exponentiation(); abstol, reltol);
+@time sols4 = run_reservoir_trajectories(reservoir, rho0s, tmax, Exponentiation(EXP_krylovkit()); abstol, reltol);
 
 [norm(sols1.integrated - sol.integrated) for sol in [sols2, sols3, sols4]] # ≈ [0.0, 0.0]
 

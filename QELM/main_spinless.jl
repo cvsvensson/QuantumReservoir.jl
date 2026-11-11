@@ -1,13 +1,13 @@
-using QuantumDots, QuantumDots.BlockDiagonals, LinearAlgebra
+using FermionicHilbertSpaces, LinearAlgebra
 using LinearAlgebra
 using Plots
-using LinearSolve
 using ExponentialUtilities
 using MLJLinearModels
-using OrdinaryDiffEq
+using OrdinaryDiffEqHighOrderRK, OrdinaryDiffEqTsit5
 using Statistics
-using Folds
 using Random
+includet("opensystems.jl")
+includet("system.jl")
 includet("misc.jl")
 
 Random.seed!(1234)
@@ -16,10 +16,10 @@ validation_parameters = generate_training_parameters(1000);
 #includet("gpu.jl")
 ##
 N = 1
-# labels = push!(vec(Base.product(0:N, 1:2) |> collect), (0, 0))
 labels = vec(Base.product(0:N, 1:2) |> collect)
-qn = QuantumDots.fermionnumber
-c = FermionBasis(labels; qn)
+@fermions f
+space = hilbert_space(f, labels, NumberConservation())
+bases = (; f, space)
 hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2 && is_nearest_neighbours(labels[k1], labels[k2])]
 Ilabels = filter(x -> first(x) <= 0, labels)
 Rlabels = filter(x -> first(x) > 0, labels)
@@ -34,35 +34,31 @@ V = Dict((k1, k2) => rand() for (k1, k2) in hopping_labels) # random_hoppings(ho
 ε = Dict(l => rand() - 0.5 for l in labels)
 Γ = 0.5ones(2, 2)#.5 *1e0 * (rand(2, 2))
 ##
-HR = hopping_hamiltonian(c, J; labels=Rconnections)
-HI = hopping_hamiltonian(c, J; labels=Iconnections)
-HIR = hopping_hamiltonian(c, J; labels=IRconnections)
-HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
-Hqd = qd_level_hamiltonian(c, ε)
+HR = representation(hopping_hamiltonian(f, J; labels=Rconnections), space)
+HI = representation(hopping_hamiltonian(f, J; labels=Iconnections), space)
+HIR = representation(hopping_hamiltonian(f, J; labels=IRconnections), space)
+HV = representation(coulomb_hamiltonian(f, V; labels=hopping_labels), space)
+Hqd = representation(qd_level_hamiltonian(f, ε), space)
 ##
 H0 = HR + HI + 5HV + 0Hqd
 H = H0 + HIR
-QuantumDots.diagonalize(H).values |> sort
-QuantumDots.diagonalize(H - 5HV).values |> sort
-QuantumDots.diagonalize(H - 5.1HV).values |> sort |> diff |> minimum
-QuantumDots.diagonalize(H).values |> sort |> diff |> minimum
+eigvals(Hermitian(Matrix(H))) |> sort
+eigvals(Hermitian(Matrix(H - 5HV))) |> sort
+eigvals(Hermitian(Matrix(H - 5.1HV))) |> sort |> diff |> minimum
+eigvals(Hermitian(Matrix(H))) |> sort |> diff |> minimum
 ##
 μmin = -1e5
 μs = [10, 0]#[μmin, μmin]#rand(2)
 T = 10norm(Γ)
-# leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k], c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)]); T, μ=μs[k]) for k in 1:1)
-leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)],); T, μ=μs[k]) for k in 1:1)
-input_dissipator = CombinedLead(Tuple(c[i]' for i in Ilabels); T, μ=μmin)
-# input_dissipator2 = CombinedLead((c[0, 2]',); T, μ=μmin)
+leads = Tuple(CombinedLead((representation(f[N, k]' * Γ[k, k] + f[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], space),); T, μ=μs[k]) for k in 1:1)
+input_dissipator = CombinedLead(Tuple(representation(f[i]', space) for i in Ilabels); T, μ=μmin)
 leads0 = (input_dissipator, leads...)
 
 # ls = LindbladSystem(H, leads0)
 # vals, vecs = eigen(Matrix(ls.total))
-reservoir = QuantumReservoir(H0, H, leads0, leads, c, Ilabels, Rlabels);
-cI = FermionBasis(Ilabels; qn)
-cR = FermionBasis(Rlabels; qn)
-rhoI0 = pretty_print(partial_trace(reservoir.rho0, Ilabels, c), cI)
-rhoR0 = pretty_print(partial_trace(reservoir.rho0, Rlabels, c), cR)
+reservoir = QuantumReservoir(H0, H, leads0, leads, bases, Ilabels, Rlabels);
+rhoI0 = partial_trace_to(reservoir.rho0, bases, Ilabels)
+rhoR0 = partial_trace_to(reservoir.rho0, bases, Rlabels)
 
 ##
 M = 400
@@ -74,13 +70,15 @@ tspan = (0, 40 / (norm(Γ)^1))#*log(norm(Γ)))
 t_obs = range(tspan[end] / 100, tspan[end] / 2, 20)
 t_nl = [1]
 proc = CPU();
+op = representation(f[N, 1]' * f[N, 1], space)
 @time training_sols = time_evolve_exp(reservoir, training_ensemble, t_obs; proc);
-@time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, t_nl; op=c[N, 1]' * c[N, 1], proc);
+@time training_sols2 = time_evolve_exp(reservoir, training_ensemble, t_obs, t_nl; op, proc);
 @time test_sols = time_evolve_exp(reservoir, test_ensemble, t_obs; proc);
-@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=ROCK4());
-@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs, 100; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
-superpos_ensemble = InitialEnsemble([training_ensemble.rho0s[1], training_ensemble.rho0s[2], (training_ensemble.rho0s[1] + training_ensemble.rho0s[2]) / 2], nothing)
-@time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs, t_nl; op=c[N, 1] * c[N, 1]', proc, alg=ROCK4());
+@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs; proc, alg=Tsit5());
+@time timesols = time_evolve_ode(reservoir, training_ensemble[1:2], tspan, t_obs, t_nl; op=representation(f[N, 1] * f[N, 1]', space), proc, alg=Tsit5());
+superpos_states = [training_ensemble.rho0s[1], training_ensemble.rho0s[2], (training_ensemble.rho0s[1] + training_ensemble.rho0s[2]) / 2]
+superpos_ensemble = InitialEnsemble(superpos_states, training_data(superpos_states, reservoir.bases, reservoir.I_occ_ops, Ilabels))
+@time timesols = time_evolve_ode(reservoir, superpos_ensemble, tspan, t_obs, t_nl; op=representation(f[N, 1] * f[N, 1]', space), proc, alg=Tsit5());
 ##
 p = plot();
 map((sol, ls) -> plot!(p, sol.ts, sol.currents; ls, lw=2, c=[:red :blue], label="Lead" .* string.(eachindex(reservoir.leads))), timesols, [:solid, :dash, :dashdot]);
@@ -125,26 +123,27 @@ loss_function(W1, training_sols.data, training_ensemble.data)
 loss_function(W1, test_sols.data, test_ensemble.data)
 ##
 
-function get_loss_function(c, J, V, ε, Γ, M, training_parameters, validation_parameters)
-    HR = hopping_hamiltonian(c, J; labels=Rconnections)
-    HI = hopping_hamiltonian(c, J; labels=Iconnections)
-    HIR = hopping_hamiltonian(c, J; labels=IRconnections)
-    HV = coulomb_hamiltonian(c, V; labels=hopping_labels)
-    Hqd = qd_level_hamiltonian(c, ε)
+function get_loss_function(bases, J, V, ε, Γ, M, training_parameters, validation_parameters)
+    (; f, space) = bases
+    HR = representation(hopping_hamiltonian(f, J; labels=Rconnections), space)
+    HI = representation(hopping_hamiltonian(f, J; labels=Iconnections), space)
+    HIR = representation(hopping_hamiltonian(f, J; labels=IRconnections), space)
+    HV = representation(coulomb_hamiltonian(f, V; labels=hopping_labels), space)
+    Hqd = representation(qd_level_hamiltonian(f, ε), space)
     function _loss_function(v, ϵ, μs, γ, tend)
         H0 = HR + HI + v * HV + ϵ * Hqd
         H = H0 + HIR
         Γ = γ * Γ
         T = 10norm(Γ)
-        input_dissipator = CombinedLead(Tuple(c[i]' for i in Ilabels); T, μ=-1e5)
-        leads = Tuple(CombinedLead((c[N, k]' * Γ[k, k] + c[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)],); T, μ=μs[k]) for k in 1:1)
+        input_dissipator = CombinedLead(Tuple(representation(f[i]', space) for i in Ilabels); T, μ=-1e5)
+        leads = Tuple(CombinedLead((representation(f[N, k]' * Γ[k, k] + f[N, mod1(k + 1, 2)]' * Γ[k, mod1(k + 1, 2)], space),); T, μ=μs[k]) for k in 1:1)
         leads0 = (input_dissipator, leads...)
-        reservoir = QuantumReservoir(H0, H, leads0, leads, c, Ilabels, Rlabels)
+        reservoir = QuantumReservoir(H0, H, leads0, leads, bases, Ilabels, Rlabels)
         training_ensemble = InitialEnsemble(training_parameters[1:M], reservoir)
         test_ensemble = InitialEnsemble(validation_parameters[1:M], reservoir)
         t_obs = range(tend / 50, tend, 20)
-        training_sols = time_evolve(reservoir, training_ensemble, t_obs)
-        test_sols = time_evolve(reservoir, test_ensemble, t_obs)
+        training_sols = time_evolve_exp(reservoir, training_ensemble, t_obs)
+        test_sols = time_evolve_exp(reservoir, test_ensemble, t_obs)
         X = training_sols.data
         y = training_ensemble.data
         ridge = RidgeRegression(1e-6; fit_intercept=true)
@@ -153,14 +152,14 @@ function get_loss_function(c, J, V, ε, Γ, M, training_parameters, validation_p
     end
 end
 ##
-fl = get_loss_function(c, J, V, ε, Γ, 100, training_parameters, validation_parameters)
+fl = get_loss_function(bases, J, V, ε, Γ, 100, training_parameters, validation_parameters)
 @time fl(5, 0, 10, 1, 20)
 plot([fl(v, 0.0, 0.0, 1.0, 10.0) for v in range(0, 100, 10)])
 plot([fl(6.0, v, 100.0, 1.0, 10.0) for v in range(-1, 1, 10)])
 plot([fl(6.0, 0.0, v, 1.0, 10.0) for v in range(0, 10, 10)])
 plot([fl(6.0, 0.0, 100.0, 1.0, v) for v in range(0.5, 10, 10)])
 ##
-using Optimization, OptimizationBBO, OptimizationOptimJL
+using Optimization, OptimizationOptimJL
 # (v, ϵ, μs, γ, tend)
 prob = OptimizationProblem((u, p) -> fl(u...), [1.0, 1.0, 1.0, 1.0, 10.0]; lb=Float64[0, -10, -10, 0.5, 1], ub=Float64[10, 10, 100, 2, 40])
 sol = solve(prob, ParticleSwarm(); maxiters=1000, maxtime=20, show_trace=true)
@@ -173,37 +172,36 @@ sol1 = solve(prob, ParticleSwarm(); maxiters=1000, maxtime=20, show_trace=true)
 ##
 sol = solve(OptimizationProblem((x, p) -> norm(x .^ 2), [1.0, 2.0, 3.0]), ParticleSwarm(); maxiters=100, maxtime=1, show_trace=true)
 ## Analyze initial state
+ls0 = reservoir.ls0
+rho0 = reservoir.rho0
+rhointernal0 = reservoir.rhointernal0
+particle_number = representation(number_operator(f, labels), space)
 rhod0 = diag(rho0)
 @assert isapprox(tr(rho0), 1; atol=1e-3)
-internal_N = QuantumDots.internal_rep(particle_number, ls0)
-currents_ops = map(diss -> diss' * internal_N, ls0.dissipators)
-currents = map(diss -> tr(QuantumDots.tomatrix(diss * rhointernal0, ls0) * particle_number), ls0.dissipators)
-currents2 = map(op -> rhointernal0' * op, currents_ops)
-@assert norm(map(-, currents, currents2)) / norm(currents) < 1e-2
+currents_ops = collect(values(current_operators(ls0, particle_number)))
+currents = [tr(tomatrix(diss * rhointernal0, ls0) * particle_number) for diss in values(ls0.dissipators)]
+currents2 = [rhointernal0' * op for op in currents_ops]
+@assert norm(real.(currents) - real.(currents2)) < 1e-2
 
 ##
-cR = FermionBasis(Rlabels; qn)
-cI = FermionBasis(Ilabels; qn)
-rhoI0 = partial_trace(rho0, Ilabels, c, cI.symmetry)
-rhoR0 = partial_trace(rho0, Rlabels, c, cR.symmetry)
+rhoI0 = partial_trace_to(rho0, bases, Ilabels)
+rhoR0 = partial_trace_to(rho0, bases, Rlabels)
 @assert isapprox(rhoI0[1], 1; atol=1e-3)
 @assert isapprox(tr(rhoI0), 1; atol=1e-3)
-pretty_print(rhoI0, cI)
-pretty_print(rhoR0, cR)
+rhoI0
+rhoR0
 
 ##
-# ls = QuantumDots.LazyLindbladSystem(H, leads)
-ls = QuantumDots.LindbladSystem(H, leads)
-internal_N = QuantumDots.internal_rep(particle_number, ls)
-current_ops = map(diss -> diss' * internal_N, ls.dissipators)
-R_occ_ops = map(k -> QuantumDots.internal_rep(c[k]' * c[k], ls), Rlabels)
-I_occ_ops = map(k -> c[k]' * c[k], Ilabels)
+ls = reservoir.ls
+current_ops = collect(values(current_operators(ls, particle_number)))
+R_occ_ops = map(k -> vecrep(representation(f[k]' * f[k], space), ls), Rlabels)
+I_occ_ops = map(k -> representation(f[k]' * f[k], space), Ilabels)
 
 ## Entanglement non-linearity
 perm = sortperm(training_ensemble.data[1, :])
 entropies = training_ensemble.data[1, perm];
 rhos = training_ensemble.rho0s[perm];
-ent1 = [input_entanglement((r1 + r2) / 2) for (n1, r1) in enumerate(rhos), (n2, r2) in enumerate(rhos)]
+ent1 = [input_entanglement((r1 + r2) / 2, Ihalflabels, bases) for (n1, r1) in enumerate(rhos), (n2, r2) in enumerate(rhos)]
 ent2 = [(entropies[n1] + entropies[n2]) / 2 for (n1, r1) in enumerate(rhos), (n2, r2) in enumerate(rhos)]
 
 heatmap(ent1)

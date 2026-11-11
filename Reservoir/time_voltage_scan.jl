@@ -1,22 +1,19 @@
-using DrWatson
-using QuantumDots
+using FermionicHilbertSpaces
 using LinearAlgebra
 using Random
 using OrdinaryDiffEqTsit5
-using LinearSolve
 using Plots
 using Statistics
 using MLJLinearModels
 using MultivariateStats
 using ExponentialUtilities
 using KrylovKit
-using UnPack
 using OhMyThreads
 using LogExpFunctions
-using Dictionaries
 BLAS.set_num_threads(1)
 Random.seed!(1234)
 includet("..\\system.jl")
+includet("..\\opensystems.jl")
 includet("src.jl")
 includet("narma.jl")
 includet("training.jl")
@@ -24,12 +21,12 @@ includet("plots.jl")
 ##
 N = 4
 labels = 1:N
-qn = FermionConservation()
-c = FermionBasis(labels; qn)
+@fermions f
+space = hilbert_space(f, labels, NumberConservation())
 hopping_labels = [(labels[k1], labels[k2]) for k1 in 1:length(labels), k2 in 1:length(labels) if k1 > k2] #&& is_nearest_neighbours(labels[k1], labels[k2])]
 Random.seed!(321)
 signal = [(-1)^rand(Bool) for _ in 1:400];
-inputs = [
+inputs = vec([
     let
         #tfinal = 40
         tspan = (0, tfinal)
@@ -41,7 +38,7 @@ inputs = [
         (; tspan, dt, signal, voltage_input, mask, initial_state=StationaryState(), ts)
     end
     for tfinal in range(1, 1 * 1000, 5), amplitude in logrange(0.1, 20, 6)
-];
+]);
 ##
 Nres = 20
 reservoirs = []
@@ -50,7 +47,7 @@ for seed in 1:Nres
     # define all scales
     scales = (; Vscale=2, tscale=1, εscale=1)
     params = rand_reservoir_params(labels; scales...)
-    push!(reservoirs, (; seed, params, scales, qn, c))
+    push!(reservoirs, (; seed, params, scales))
 end;
 leads = []
 for seed in 1:Nres
@@ -65,29 +62,29 @@ for seed in 1:Nres
     push!(leads, (; Γ, scales, seed, temperature, labels))
 end;
 ##
-measurement = (; measure=CurrentMeasurements(numberoperator(c)), time_multiplexing=4);
+measurement = (; measure=CurrentMeasurements(representation(number_operator(f, labels), space)), time_multiplexing=4);
 ##
 save_spectrum = false
 # alg = PiecewiseTimeSteppingMethod(EXP_SCIML())
 alg = PropagatorMethod()
 res_lead_input_combinations = collect(Iterators.product(zip(reservoirs, leads), inputs));
 @time measurementslind = tmap(res_lead_input_combinations) do ((res, lead), input)
-    run_reservoir(res, lead, input, measurement, Lindblad(), c, alg; save_spectrum)
+    run_reservoir(res, lead, input, measurement, Lindblad(), f, space, alg; save_spectrum)
 end
 @time measurementspauli = tmap(res_lead_input_combinations) do ((res, lead), input)
-    run_reservoir(res, lead, input, measurement, Pauli(), c, alg; save_spectrum)
+    run_reservoir(res, lead, input, measurement, Pauli(), f, space, alg; save_spectrum)
 end;
 @time propagators_lindblad = tmap(res_lead_input_combinations) do ((res, lead), input)
-    generate_propagators(res, lead, input, Lindblad(), c)[1]
+    generate_propagators(res, lead, input, Lindblad(), f, space)[1]
 end;
 @time propagators_pauli = tmap(res_lead_input_combinations) do ((res, lead), input)
-    generate_propagators(res, lead, input, Pauli(), c)[1]
+    generate_propagators(res, lead, input, Pauli(), f, space)[1]
 end;
 @time master_matrices_lindblad = tmap(res_lead_input_combinations) do ((res, lead), input)
-    generate_master_matrices(res, lead, input, Lindblad(), c)
+    generate_master_matrices(res, lead, input, Lindblad(), f, space)
 end;
 @time master_matrices_pauli = tmap(res_lead_input_combinations) do ((res, lead), input)
-    generate_master_matrices(res, lead, input, Pauli(), c)
+    generate_master_matrices(res, lead, input, Pauli(), f, space)
 end;
 ## make non-linearity measure from commutator
 algebras_lindblad = map(prop -> generate_algebra(prop, 5), propagators_lindblad);
@@ -148,11 +145,11 @@ for (n, kv) in enumerate(targets)
     ribbon_lind = ((mse_lind .- first.(quantile_lind), last.(quantile_lind) .- mse_lind))
     ribbon_pauli = ((mse_pauli .- first.(quantile_pauli), last.(quantile_pauli) .- mse_pauli))
     # display(plot([first.(quantile_lind), last.(quantile_lind)]))
-    heatmap(dropdims(mse_lind; dims=1); title="$(kv[1]) lindblad", clims=(0, 1)) |> display
-    heatmap(dropdims(mse_pauli; dims=1); title="$(kv[1]) pauli", clims=(0, 1)) |> display
+    heatmap(mse_lind; title="$(kv[1]) lindblad", clims=(0, 1)) |> display
+    heatmap(mse_pauli; title="$(kv[1]) pauli", clims=(0, 1)) |> display
     # heatmap(dts_pauli, mse_pauli; label="$(kv[1]) pauli", color=2, marker, ribbon=ribbon_pauli)
 end
-heatmap(dropdims(mapslices(median, memory_lindblad .* non_linearity_lindblad; dims=1); dims=1); title="memory*nonlinearity, lindblad", clims=(0, 1)) |> display
+heatmap(mapslices(median, memory_lindblad .* non_linearity_lindblad; dims=1); title="memory*nonlinearity, lindblad", clims=(0, 1)) |> display
 ##
 plot!(dts_lind, map(median, eachcol(non_linearity_lindblad)); label="non-commutativity lindblad", lw=3, color=1, ls=:dash)
 plot!(dts_pauli, map(median, eachcol(non_linearity_pauli)); label="non-commutativity pauli", lw=3, color=2, ls=:dash)
@@ -170,11 +167,11 @@ heatmap(map(ss -> norm(ss), svdvals_norms_lindblad))
 heatmap(map(ss -> diff(ss)[1] / ss[1], svdvals_norms_lindblad), clims=(0, 0.5))
 heatmap(map(x -> x.mses[3], task_props_pauli), clims=(0, 1))
 ##
-summary_gif(reservoirs[1], leads[1], inputs[6], Pauli(), measurement, targets[6], (; warmup=0.2, train=0.5))
-summary_gif(reservoirs[1], leads[1], inputs[6], Lindblad(), measurement, targets[6], (; warmup=0.2, train=0.5))
-summary_gif(reservoirs[1], leads[7], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
-summary_gif(reservoirs[1], leads[20], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
-# summary_gif(reservoirs[1], leads[end], input, Pauli(), measurement, targets, (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[1], inputs[6], Pauli(), f, space, measurement, targets, (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[1], inputs[6], Lindblad(), f, space, measurement, targets, (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[7], inputs[6], Pauli(), f, space, measurement, targets, (; warmup=0.2, train=0.5))
+summary_gif(reservoirs[1], leads[20], inputs[6], Pauli(), f, space, measurement, targets, (; warmup=0.2, train=0.5))
+# summary_gif(reservoirs[1], leads[end], input, Pauli(), f, space, measurement, targets, (; warmup=0.2, train=0.5))
 
 ##
 heatmap(map(x -> norm(x.mses), task_props_lind), xlabel=:lead, ylabel=:reservoir, title=:lindblad, colorbar_title="MSE")
